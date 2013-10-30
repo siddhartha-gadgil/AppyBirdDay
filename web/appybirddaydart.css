@@ -1,0 +1,114 @@
+
+body {
+  background-color: skyblue;
+  font-family: 'Open Sans', sans-serif;
+  font-size: 14px;
+  font-weight: normal;
+  line-height: 1.2em;
+  margin: 15px;
+}
+
+
+h1, p {
+  color: #333;
+}
+
+input {
+  float: right
+  }
+
+.leftmargin{
+  margin-left: 40px;
+  margin-right: auto;
+}
+
+#main{
+  float:left;
+}
+
+#topmatter{
+  padding: 1px;
+  margin-left:70px;
+  margin-right: 50px;
+  }
+
+.maintitle {
+  font-size: 30px;
+  text-align:center;
+  }
+
+.subtitle {
+  font-family: helvetica;
+  font-size: 24px;
+  font-style: italic;
+  text-align: center;
+  }
+  
+.subheader {
+  font-weight: bold;
+}
+
+#querymatter {
+ /* min-height:400px;*/
+  margin-left: 80px;
+  background-color: white;
+  border: 5px;
+  float:left;
+  border-style: solid;
+  border-color: #ffa0a0;
+  border-width: 2px;
+  background-color: #ffffa0;
+  }
+
+.querycol {
+  float: left;
+  width: 180px;
+  margin:30px;
+  padding-right: 25px;
+  border-style: solid;
+  border-color: #a0ffa0;
+  border-width: 2px;
+  padding:7px;
+  background-color: #f8c8e8;
+  }
+  
+.sidebar {
+  float:right;  
+  width: 220px;
+  background-color: #f8c8e8;
+  min-height: 400px;
+  
+  padding-left:10px;
+  padding-right:10px;
+  border-width: 2px;
+  border-style: solid;
+  border-color: cyan;
+  }
+
+.birdchoice {
+  color:blue;
+}
+
+.birdchoice:hover {
+  color: blue;
+  font-weight:bold;
+  text-decoration:underline;
+  cursor: pointer;
+}
+
+.error {
+  background-color: #ff6060;
+}
+
+
+
+#footbar {
+  clear: both;
+  font-size: 16px;
+}
+
+#debug  {
+  clear: both;
+  color: red;
+  background-color: white;
+  }

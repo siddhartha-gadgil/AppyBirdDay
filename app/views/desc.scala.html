@@ -1,0 +1,68 @@
+@(bins: Map[String,List[models.Attributes.BinAttr]], 
+behs: Map[String,List[models.Attributes.BehavAttr]], 
+strs: List[models.Attributes.StringAttr], 
+bestbirds: List[models.WikiRead.BirdPage],
+rep: models.Attributes.Rep)
+
+@import models.Attributes._
+<!DOCTYPE html>
+
+<html lang="en">
+    <head>
+		<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    <title> AppyBirdDay: An Application for identifying Indian birds </title>
+	<link rel="stylesheet" href="assets/stylesheets/blueprint/screen.css" type="text/css" media="screen, projection">
+	<link rel="stylesheet" href="assets/stylesheets/blueprint/plugins/fancy-type/screen.css" type="text/css" media="screen, projection">
+    </head>
+    <body>
+	<div class="container">
+		<hr class="space">
+    <h1> AppyBirdDay: Identifying Indian birds </h1>
+		<hr>
+		<div class="span-17 colborder">
+		<h2 class="alt"> Enter whichever traits you have observed</h2>
+		<form action="query">
+		<div class="span-8">
+		<ul>
+		@strs.map{attr =>
+			<b>@attr.id.group @attr.id.name<br></b>
+			 @attr.choices.map{ choice =>
+				 <input type="radio" name="@attr.toString" value="@choice" @checked(rep(attr).asInstanceOf[String] == choice)>@choice<br></li>
+					}
+				
+				}
+		</ul> 
+		<button type="submit">Update</button>
+		</div>
+		<div class="span-8">
+		@bins.map{case (group, bs) =>
+				<b>@group</b><br>
+					@bs.map{ bin =>
+					<input type="checkbox" name="@bin.id.toString" value="seen"  @checked(rep(bin).asInstanceOf[Boolean])>  @bin.id.name <br>
+					}
+				}
+		@behs.map{case (group, bs) =>
+				<b>@group</b><br>
+					@bs.map{ beh =>
+					<input type="checkbox" name="@beh.id.toString" value="seen" @checked(rep(beh).asInstanceOf[Boolean])>  @beh.id.name <br>
+					}
+				}
+		</div>
+		</form>
+		</div>
+
+		<div class="span-6 last">
+		<h3 class="alt"> Best matches</h3>
+		
+		@bestbirds.map{bird =>
+				@bird.name <br>
+				<i> @bird.sci </i><br>
+				<img src="http:@WikiRead.birdImage(bird.url)">
+				<hr class="space">
+				<hr class="space">
+				}
+		</ul> 
+		</div>
+    </body>
+</html>
+
