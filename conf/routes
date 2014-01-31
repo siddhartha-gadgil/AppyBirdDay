@@ -23,3 +23,5 @@ GET		/web/*file					controllers.Assets.at(path = "/web", file)
 POST	/birdDescUpload				controllers.Application.birdDescUpload
 
 GET		/birdDescs					controllers.Application.birdDesc	
+
+GET		/logs						controllers.Application.logs

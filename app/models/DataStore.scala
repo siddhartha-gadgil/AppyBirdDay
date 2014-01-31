@@ -23,6 +23,10 @@ import play.api.libs.json._
 
 import play.api.Play.current
 
+import play.api.libs.iteratee._
+import play.api.libs.EventSource
+
+
 import models.Attributes._
 
 object DataStore extends Controller with MongoController {
@@ -107,6 +111,15 @@ object DataStore extends Controller with MongoController {
 //	  birdDescColl.insert(desc)	
 	}
 	
+	def saveDesc(desc: JsObject) = { 
+	  birdDescColl.save(desc)
+	  channel.push(desc)
+	}
+	
+	def removDesc(id: JsObject) = birdDescColl.remove(id)
+	
     def birdDescs = birdDescColl.find(all).cursor[JsObject].toList.map(Json.toJson(_))
+    
+    val (out, channel) = Concurrent.broadcast[JsValue]
 }
 
