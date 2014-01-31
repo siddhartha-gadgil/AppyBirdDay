@@ -17,7 +17,7 @@
     <h1 id="intro" class="maintitle"> AppyBirdDay: Identifying Indian birds </h1>
      
 
-    <p class="subtitle"> Enter whichever traits you have observed</p>
+    <p class="subtitle" id="subt"> Enter whichever traits you have observed</p>
 
     </section>
     
@@ -25,14 +25,18 @@
     <section id="querymatter">
      
     <div class="querycol">
-      <h3> Size: </h3>
-      <div id="size"></div>
-   
+      <h3 style="float:left"> Size &nbsp </h3><span id="size"></span>  
     
-    <br><br>  
+    <br><br><br><br>  
 
-    <h3>Colours: </h3> 
+    <h3>Colours </h3> 
     <ul id="colour_list">
+       </ul>
+       
+       <br>
+    
+    <h3>More Colours </h3> 
+    <ul id="other_colour_list">
        </ul>
     </div>
     
@@ -43,9 +47,8 @@
     <div id="beh_attr"></div>
     </div>
 
-  <div id="queryfoot"></div>
-  </section>
-  </div>
+  
+  
 
   <section class="sidebar" id= "sidebar">
   <h2 id="besthead">Best matches:</h2>
@@ -56,18 +59,25 @@
   <div id="rest"></div>
   </section>
 
+</section>
+
+<div id="queryfoot"></div>
+  </div>
+
   <div id="footbar"></div>
 
+    <h2> Debug trace</h2>
+    <button id ="cleartrace"> clear trace</button>
   <div id ="debug">
     <br>
-    <b> Debug data</b>
     <p id="rep"> </p>
     <p id="descs"></p>
+    <p id="debugOut"></p>
     </div>
 
    
     
     <script type="application/dart" src="appybirddaydart.dart"></script>
-    <script src="packages/browser/dart.js"></script>
+    <script src="packages/browser/dart.js"></script> 
   </body>
 </html>

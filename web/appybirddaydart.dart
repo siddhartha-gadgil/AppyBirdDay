@@ -2,8 +2,35 @@ import 'dart:html';
 import 'dart:core';
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
+
+// To do:
+// 
+// Morph
+// check attributes, weights (abstract these)
+
+num sizeWt = -10;
+
+num sizeExactMatch = 12.0;
+
+num colWt = 5;
+
+num colPar = 0.4;
+
+num binSeen = 5;
+
+num behCommonSeen = 5;
+
+num behRareSeen = -5;
+
+bool local = false;
 
 const baseURL = "en.wikipedia.org";
+
+void debugOut(String deb){
+  var out = new DivElement()..text= deb;
+  querySelector('#debugOut').children.add(out); 
+}
 
 class Features{
   Map<String, Map<String, String>> features;
@@ -17,7 +44,10 @@ class Features{
   
   String get(String group, String attr)  => features[group][attr];
   
-  bool has(String group, String attr) => features.containsKey(group) && features[group].containsKey(attr);
+  num getNum(String group, String attr) => int.parse(get(group, attr));
+  
+  bool has(String group, String attr) =>
+      features.containsKey(group) && features[group].containsKey(attr);
   
   Features(this.features);
   
@@ -26,7 +56,11 @@ class Features{
   }
   
   Features.init (){
-    features = {"size":{"size" : 25 }};
+    features = {"size":{"size" : "25" }};
+  }
+  
+  Features.copy(Features src){
+    features = src.features;
   }
 }
 
@@ -42,6 +76,8 @@ class Descriptions{
     descs[id] = features;
   }
   
+  bool has(BirdId birdId) => descs.containsKey(birdId);
+  
   Features getFeatures(BirdId id) => descs[id];
   
   String getAttribute(BirdId id, group, attr) => descs[id].get(group, attr); 
@@ -54,10 +90,19 @@ class Descriptions{
     List<BirdId> sorted =  birds..sort((a,b) => 
                       (repDiff(a, rep).compareTo(repDiff(b, rep))));
     return sorted;
+   
   }
   
   Descriptions.empty() {
     descs = new Map();
+  }
+  
+  String  display(){
+    var dsp = "{";
+    descs.keys.forEach((birdId) =>
+      dsp += "${birdId.name} : ${getFeatures(birdId).features.toString()}, "      
+    );
+    return dsp+"}";
   }
 }
 
@@ -78,54 +123,84 @@ class BirdId{
 
 
 String sizePrompt(String value){
-  return "Size : ${value} cm";
+  num numval = int.parse(value);
+  Map<String, num> modelSizes = {"Sunbird" : 10,
+                                 "Sparrow" : 15,
+                                 "Bulbul" : 20,
+                                 "Myna"    : 23,
+                                 "Crow"    : 43,
+                                 "Kite"    : 61,
+                                 "Vulture" : 91};
+  
+  List<String> ord = modelSizes.keys.toList();
+  ord.sort((x, y) => ((modelSizes[x]-numval).abs()).compareTo((modelSizes[y]-numval).abs()));
+  
+  String closest = ord[0];
+  
+  return "  ${value} cm (~ $closest=${modelSizes[closest]}cm)";
 }
 
+void initInp(InputElement inp, Features features, String group, attr){
+  if (features.has(group, attr)) inp.value = features.get(group, attr);
+}
 
-DivElement sizeInput(Features features) {
+SpanElement sizeInput(Features features, [bool rep=true]) {
   var prompt = new ParagraphElement()..text= sizePrompt("25");
   
   RangeInputElement slider = new RangeInputElement()
               ..min = "0"
               ..max = "120"
               ..value = "25";
-  
-       slider.onChange.listen((Event event){
-       var size = slider.value;
-       prompt.text = sizePrompt(size);
-       features.add("size", "size", size);
-       repUpdate();
+      
+      initInp(slider, features, 'size', 'size');
+      slider.onChange.listen((Event event){
+      var size = slider.value;
+      prompt.text = sizePrompt(size);
+      features.add("size", "size", size);
+      if (rep) {birdSort(features);
+       debugOut(" ; ");
+       repUpdate();}
         });
   
   
-  var div = new DivElement()
+  var span = new SpanElement()
               ..children = ([prompt, slider]);
   
-  return div;
+  return span;
 }
 
 
 
 var reported = new Features.init();
 
-var descs = new Descriptions.empty();
+var descrips = new Descriptions.empty();
 
 void addDesc(BirdId id, Features feat){ 
-  descs.addFeatures(id, feat);
+  descrips.addFeatures(id, feat);
 //also submit to server
 }
 
 var mainColours = ["back","head", "breast"];
 
-Map<String, List<String>> binAttr = {"Tail" : ["long", "forked"], 
-                                     "Beak" : ["hooked", "long"]};
-
-
-Map<String, List<String>> behAttr = {"Seen" : ["flying", "on the ground", "on a branch"],
-                                     "Habitat" : ["dry", "forested"]
+Map<String, List<String>> binAttr = {"Tail" : ["long", "forked", "upright", "fan"], 
+                                     "Beak" : ["hooked", "long", "curved"],
+                                      "Legs" : ["long"], 
+                                      "Feet": ["webbed", "spread-out"],
+                                      "Crest/cap" : ["crest", "cap"]
 };
 
-var otherColours=["leg", "beak", "neck"];
+
+Map<String, List<String>> behAttr = {"Seen" : ["flying overhead",
+                                               "on the ground",
+                                               "on a branch",
+                                               "swimming"],
+                                     "Habitat" : ["grassland/field", "forested", "near waterbody",
+                                                  "marshy", 
+                                                  "hilly", "urban"],
+                                     "Flight" : ["gliding", "catching insects", "swift"]
+};
+
+var otherColours=["leg", "beak", "neck", "tail", "wing-underside", "wing-tips"];
 
 
 
@@ -151,7 +226,7 @@ class RGB{
   int get w => R + G + B;
   
   num colDiff(RGB that){
-    return (r - that.r).abs() + (g - that.g).abs() + (b - that.b).abs() + (w - that.w).abs();
+    return ((r - that.r).abs() + (g - that.g).abs() + (b - that.b).abs() + (w - that.w).abs())/750;
   }
 }
 
@@ -161,15 +236,15 @@ num colStringDiff(String fst, scnd){
 }
 
 num colMatch(String group, Features rep, desc){
-  if (rep.has(group, 'colour') && desc.has(group, 'colour'))
-      return -colStringDiff(rep.get(group, 'colour'), desc.get(group, 'colour'));
-  return 0;
+  return (rep.has(group, 'colour') && desc.has(group, 'colour')) ?
+      colWt * (colPar - colStringDiff(rep.get(group, 'colour'), desc.get(group, 'colour')))
+      : 0;
 }
 
 num binMatch(String group, attr, Features rep, desc){
   if (rep.has(group, attr) && desc.has(group, attr)
       && rep.get(group, attr).toLowerCase() == 'true' 
-      && desc.get(group, attr).toLowerCase() == 'true') return 10;
+      && desc.get(group, attr).toLowerCase() == 'true') {return binSeen;}
   else return 0;
 }
 
@@ -177,12 +252,20 @@ num behMatch(String group, attr, Features rep, desc){
   if (rep.has(group, attr) && desc.has(group, attr))
     {if
       (rep.get(group, attr).toLowerCase() == 'true' 
-      && desc.get(group, attr).toLowerCase() == 'often') return 10;
+      && desc.get(group, attr).toLowerCase() == 'often') return behCommonSeen;
     if
     (rep.get(group, attr).toLowerCase() == 'true' 
-    && desc.get(group, attr).toLowerCase() == 'rarely') return -5;
+    && desc.get(group, attr).toLowerCase() == 'rarely') return behRareSeen;
     }
-  else return 0;
+  return 0;
+}
+
+num sizeMatch(Features rep, desc){
+  num out =  sizeExactMatch + (desc.has('size', 'size') ? 
+      log((desc.getNum('size', 'size')/ rep.getNum('size', 'size'))).abs() *sizeWt
+        : 0.5 * sizeWt); 
+  debugOut(out.toString());
+  return out;
 }
 
 num colMatchSum(Features rep, desc){
@@ -190,59 +273,69 @@ num colMatchSum(Features rep, desc){
   for (var group in mainColours){    
       sum += colMatch(group, rep, desc);
     }
+  
+  for (var group in otherColours){    
+    sum += colMatch(group, rep, desc);
+  }
   return sum;
 }
 
 num behMatchSum(Features rep, desc){
   num sum = 0;
-  for (var group in behAttr){
+  for (var group in behAttr.keys){
     for (var attr in behAttr[group]){
       sum += behMatch(group, attr, rep, desc);
     }
   }
+  debugOut(sum.toString());
   return sum;
 }
 
 num binMatchSum(Features rep, desc){
   num sum = 0;
-  for (var group in binAttr){
+  for (var group in binAttr.keys){
     for (var attr in binAttr[group]){
       sum += binMatch(group, attr, rep, desc);
     }
   }
+  debugOut(sum.toString());
   return sum;
 }
 
 num match(Features rep, desc) => binMatchSum(rep, desc)
                                   + behMatchSum(rep, desc)
-                                  + colMatchSum(rep, desc);
+                                  + colMatchSum(rep, desc) 
+                                  + sizeMatch(rep, desc);
 
-LIElement checkboxChoose(String group, String name, Features features){
+LIElement checkboxChoose(String group, String name, Features features, [bool rep=true]){
   LIElement item = new LIElement();
   var par = new ParagraphElement();
-  par.text = name + ": ";
+  par.text = name;
   var inp = new CheckboxInputElement();
+  initInp(inp, features, group, name);
   inp.onChange.listen((Event e){
-        String value;
-        if (inp.checked) {value = true.toString();} else {value = false.toString();}
+        String value = inp.checked ? 'true' : 'false';
         features.add(group, name, value);
-        repUpdate();
+        if (rep) {birdSort(features);
+        repUpdate();}
       });
   par.children.add(inp);
   item.children.add(par);
   return item;
 }
 
-LIElement colourChoose(String name, Features features){
+LIElement colourChoose(String name, Features features, [bool rep=true]){
   LIElement item = new LIElement();
   var par = new ParagraphElement();
-  par.text = name + ": ";
+  par.text = name;
   var inp = new InputElement();
+  initInp(inp, features, 'colour', name);
   inp
       ..type = "color"
       ..onChange.listen((Event e){
       features.add("colour", name, inp.value);
-        repUpdate();
+      if (rep){birdSort(features);
+        repUpdate();}
       });
   par.children.add(inp);
   item.children.add(par);
@@ -251,22 +344,24 @@ LIElement colourChoose(String name, Features features){
 
 
 
-UListElement checkboxList(String group, List<String> names, Features features) {
+UListElement checkboxList(String group, List<String> names, Features features, [bool rep=true]) {
   var ulist = new UListElement();
   names.forEach((String name){
-      ulist.children.add(checkboxChoose(group, name, features));
+      ulist.children.add(checkboxChoose(group, name, features, rep));
   });
   return ulist;
 }
 
 void repUpdate(){
-  querySelector("#rep").text = reported.features.toString();
+  querySelector("#rep").text = reported.features.toString()+"\n"+descrips.display();
+  var bestBirds = birdIds.take(12);
+  querySelector('#best').children = bestBirds.map(birdBox).toList();
 }
 
 
-List<Element> colourquerySelector(List<String> colours, Features features){
+List<Element> colourquerySelector(List<String> colours, Features features, [bool rep=true]){
   Iterable<LIElement> colourIter = colours.map((String col){
-    return colourChoose(col, features);
+    return colourChoose(col, features, rep);
   });    
 
   return colourIter.toList();
@@ -278,7 +373,7 @@ List<Element> colourquerySelector(List<String> colours, Features features){
     Iterable<DivElement> iterListList = bingps.keys.map((String group){
       DivElement div = new DivElement();
       div
-      ..innerHtml = "<h3>$group:</h3>"
+      ..innerHtml = "<h3>$group</h3>"
       ..children.add(checkboxList(group, binAttr[group], features));
       return div;
     }); 
@@ -322,57 +417,124 @@ List<Element> colourquerySelector(List<String> colours, Features features){
     return div;
   }
   
-  void binAttributes(Features features){
+  void binAttributes(Features features, [bool rep=true]){
     querySelector("#bin_attr").children =[];
     binAttr.keys.forEach((String group){
       var div = new DivElement();
       div
-      ..innerHtml = "<h3>$group:</h3>"
-      ..children.add(checkboxList(group, binAttr[group], features));
+      ..innerHtml = "<h3>$group</h3>"
+      ..children.add(checkboxList(group, binAttr[group], features, rep));
       querySelector("#bin_attr").children.add(div);
     });
   }
 
-  void behAttributes(Features features){
+  void behAttributes(Features features, [bool rep=true]){
     querySelector("#beh_attr").children =[];
     behAttr.keys.forEach((String group){
       var div = new DivElement();
       div
-      ..innerHtml = "<h3>$group:</h3>"
-      ..children.add(checkboxList(group, behAttr[group], features));
+      ..innerHtml = "<h3>$group</h3>"
+      ..children.add(checkboxList(group, behAttr[group], features, rep));
       querySelector("#beh_attr").children.add(div);
     });
   } 
   
+  void behDescAttributes(Features features){
+    querySelector("#beh_attr").children =[];
+    behAttr.keys.forEach((String group){
+      var ul = new UListElement();
+      var div = new DivElement()
+      ..innerHtml = "<h3>$group:</h3>";
+      div.children.add(ul);
+      behAttr[group].forEach((attr){
+        var prompt = new SpanElement()..text ="$attr";
+        var choiceButtons = new UListElement();
+        var li = new LIElement()..children = [prompt, choiceButtons, new ParagraphElement()];
+        ul.children.add(li);
+        var choices = ['often', 'sometimes', 'rarely'];
+        choices.forEach((choice){
+        var button = new RadioButtonInputElement()
+              ..name = group+":"+ attr
+              ..value = choice
+              ..onClick.listen((e) => 
+                  features.add(group , attr, choice));
+        var choicePrompt = new LIElement()..text = choice;
+        choicePrompt.children.add(button);
+        choiceButtons.children.add(choicePrompt);
+        });
+      });
+      querySelector("#beh_attr").children.add(div);
+    });
+  } 
   
-  void repQueries(Features features, List<BirdId> birdIds){
-    querySelector('#size').children = [sizeInput(features)];
+  void repQueries(){
+    querySelector('#subt').text = 
+        "Select prominent features that you have observed. The software guesses based on how well these match with the description.";
     
-    querySelector('#colour_list').children = colourquerySelector(mainColours, features);
+    querySelector('#size').children = [sizeInput(reported)];
     
-    binAttributes(features);
+    querySelector('#colour_list').children = colourquerySelector(mainColours, reported);
     
-    behAttributes(features);
+    querySelector('#other_colour_list').children = colourquerySelector(otherColours, reported);
     
-    var submitButton = new ButtonElement()
+    binAttributes(reported);
+    
+    behAttributes(reported);
+    
+    var updateButton = new ButtonElement()
     ..text="Update Database"
     ..onClick.listen((e) => descInput(birdIds));
-    querySelector('#topbar').children = [submitButton];
+    querySelector('#topbar').children = [updateButton];
+    
+    var bestBirds = birdIds.take(12);
+    querySelector('#best').children = bestBirds.map(birdBox).toList();
+    querySelector('#besthead').text = "Best Matches";
+    querySelector('#resthead').text = "";
+    querySelector('#searchhead').text = "";
+    querySelector('#searchbox').children = [];
+    querySelector('#rest').children=[];
+    
+    querySelector('#queryfoot').children = [];
   }
   
   void descQueries(Features features){
-    querySelector('#size').children = [sizeInput(features)];
+    querySelector('#subt').text = 
+        "Select prominent features of the bird. You need not describe features that are unlikely to be noticed.";
     
-    querySelector('#colour_list').children = colourquerySelector(mainColours, features);
+    querySelector('#size').children = [sizeInput(features, false)];
     
-    binAttributes(features);
+    querySelector('#colour_list').children = colourquerySelector(mainColours, features, false);
     
-    behAttributes(features);
+    querySelector('#other_colour_list').children = colourquerySelector(otherColours, features, false);
+    
+    binAttributes(features, false);
+    
+    behDescAttributes(features);
+    
+    var identButton = new ButtonElement()
+    ..text="Identify Bird"
+    ..onClick.listen((e) => repQueries());
+    querySelector('#topbar').children = [identButton];
+    
+    var morph = new SpanElement()..text ="Morph"..classes.add("inp");
+    
+    var morphInput= new InputElement()..text="morph"
+        ..size=10
+        ..classes.add("inp");
+    morphInput.onChange.listen((e) => birdChosen.morph = morphInput.value);
+
+    
+    
+    var submitButton = new ButtonElement()
+      ..text="save description"
+      ..classes.add('input')
+      ..onClick.listen((e) => submit());
+    querySelector('#queryfoot').children =[morph, morphInput, submitButton];
   }
   
-  BirdId bird;
+  BirdId birdChosen;
 
-  Features descFeatures;
+  Features descFeatures = new Features.empty();
   
   Element birdChooseList(List<BirdId> birdlst, List<BirdId> fullbirdlist){
     var div = new DivElement();
@@ -388,13 +550,15 @@ List<Element> colourquerySelector(List<String> colours, Features features){
   
   void birdBar(BirdId firstbird, List<BirdId> birdlist, List<BirdId> fullbirdlist){
 
-    bird = firstbird;
+    birdChosen = firstbird;
     var inp = new InputElement()
       ..text='search:'
       ..type ='search';
     var brdList = birdChooseList(birdlist, fullbirdlist);
     inp.onInput.listen((e){
-        var filterlist = fullbirdlist.where((bird) => (bird.name.toLowerCase().contains(inp.value.toLowerCase()))).take(15).toList();
+        var filterlist = inp.value == ''  
+           ? fullbirdlist.where((bird) => !(descrips.descs.keys.contains(bird)))
+           : fullbirdlist.where((bird) => (bird.name.toLowerCase().contains(inp.value.toLowerCase()))).take(15).toList();
         if (filterlist.isNotEmpty) {
           brdList = birdChooseList(filterlist.take(15).toList(), fullbirdlist);
           querySelector('#rest').children=[brdList];
@@ -404,31 +568,33 @@ List<Element> colourquerySelector(List<String> colours, Features features){
       });
     
 
-    querySelector('#besthead').text = "Describe:";
-    querySelector('#best').children = [birdBox(bird)];
+    querySelector('#besthead').text = "Describe";
+    querySelector('#best').children = [birdBox(birdChosen)];
     querySelector('#resthead').text = "Choose bird to describe";
-    querySelector('#searchhead').text = "Name:";
+    querySelector('#searchhead').text = "Name";
     querySelector('#searchbox').children = [inp];
     querySelector('#rest').children=[brdList];
     //querySelector('#sidebar').children= [div];
   }
   
   void descInput(List<BirdId> birds){
-   descFeatures = new Features.init();
-   descQueries(descFeatures);
-   var bestbirds = birds.take(15).toList();
-   birdBar(birds[0], bestbirds, birds);   
+    descFeatures = new Features.init();
+    descQueries(descFeatures);
+    var bestbirds = birds.where((bird) => !(descrips.descs.keys.contains(bird))).toList();
+    birdBar(bestbirds[0], bestbirds, birds);   
   }
   
   void submit(){
-    descs.addFeatures(bird, descFeatures);
+    descrips.addFeatures(birdChosen, descFeatures);
+    if (!local) putDesc(birdChosen, descFeatures);
+    querySelector("#descs").text = descrips.display();
+    descInput(birdIds);
   }
   
   BirdId getBird(Map<String, String> d){ 
     birdIds.forEach((bird){ 
-      String morph;
-      if (d.containsKey('morph')) {morph = d['morph'];} else morph=''; 
-        if (bird.sci == d['sci'] && bird.morph == morph) return bird;
+      String morph = d.containsKey('morph') ? d['morph'] : ''; 
+      if (bird.sci == d['sci'] && bird.morph == morph) return bird;
     });
     return new BirdId(d['name'], d['sci'], d['url'], d['img']);
   }  
@@ -436,9 +602,16 @@ List<Element> colourquerySelector(List<String> colours, Features features){
   void getDescs(){
     HttpRequest.getString("../birdDescs").then((s){
       List<Map<String, String>> rawDescs = JSON.decode(s);
-      rawDescs.forEach((d) => descs.add(getBird(d), 
+      rawDescs.forEach((d) => descrips.add(getBird(d), 
                                       d['group'], d['attr'], ['value']));
     });
+  }
+  
+  Map <String, String> birdIdMap(BirdId b) => {"sci" : b.sci, "morph" : b.morph};
+  
+  
+  Future<HttpRequest> clearBird(BirdId b){
+    return HttpRequest.postFormData('../birdRemove', birdIdMap(b));
   }
   
   void putDesc(BirdId b, Features desc){
@@ -458,46 +631,57 @@ List<Element> colourquerySelector(List<String> colours, Features features){
     });
   }
   
+  Future<HttpRequest> updateDesc(BirdId b, Features desc) => clearBird(b).then((e) => putDesc(b, desc));
+  
   
   Map<String, num> birdrace = {};
   
+  num abundance(String sci) =>
+    birdrace.containsKey(sci) ? 1+birdrace[sci] : 1;
+    
+  num matchBird(BirdId birdId, Features rep){ 
+      if (descrips.has(birdId)) debugOut(birdId.name);
+      return descrips.has(birdId) ? 
+          match(rep, descrips.descs[birdId]) + abundance(birdId.sci) :
+            abundance(birdId.sci);}
+  
+  void birdSort(Features features) => birdIds.sort((x,y) => matchBird(y, features).compareTo(matchBird(x, features)));        
+          
   List<Map<String, String>> wikiData = JSON.decode(wikiSampleText);
   
   List<BirdId> birdIds = (wikiData.map((f) => new BirdId.fromMap(f))).toList();
   
   
-  
-  
+
+
 void main() {
   
+ // debugOut("info");
   
+  //querySelector("#rep").text = wikiData[0]["img"];
   
+  var sse = new EventSource("../logs")..onMessage.listen((event) => debugOut(event.data));
   
-  querySelector("#rep").text = wikiData[0]["img"];
+  querySelector('#cleartrace').onClick.listen((event) =>
+      querySelector('#debugOut').children = []);
   
+  if (!local) {
   HttpRequest.getString("../wikidata").then((s){
     wikiData = JSON.decode(s);
     birdIds = (wikiData.map((f) => new BirdId.fromMap(f))).toList();
-    querySelector("#rep").text=birdIds.length.toString();
-    repQueries(reported, birdIds);
+    birdSort(new Features.empty());
+//    querySelector("#rep").text=birdIds.length.toString();
+    repQueries();
   });
   
   HttpRequest.getString("../abundances").then((s){
     birdrace = JSON.decode(s)[0]["abundance"];
-//    querySelector("#rep").text=birdrace.toString();
-       }
-  
-  
-  );
-
-  
-  
-  var w = wikiData[0];
-  
-  querySelector('#best').children.add(birdDisplay(w['name'], w['img'], w['url']));
-  
-  repQueries(reported, birdIds);
-  
+    debugOut(birdrace.toString());
+       }   
+  );  
+  repQueries();
+  }
+  else repQueries();
 }
 
 

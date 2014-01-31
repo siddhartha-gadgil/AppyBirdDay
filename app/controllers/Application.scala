@@ -4,6 +4,8 @@ import play.api._
 import play.api.mvc._
 
 import play.api.libs.json._
+import play.api.libs.iteratee._
+import play.api.libs.EventSource
 
 import models.Attributes._
 import models.WikiRead._
@@ -44,6 +46,8 @@ object Application extends Controller{
        JsObject(jsList)
   }
   
+  def birdJsObj(sci: String, morph: String ="") = JsObject(List("sci" -> Json.toJson(sci), "morph" -> Json.toJson(morph)))
+  
 //  def formJson(implicit request: Request) = Json.toJson(getHeads(request.body.asFormUrlEncoded))
                                         
   def bestBirds = List(egBird, egBird, egBird)
@@ -65,7 +69,24 @@ object Application extends Controller{
   
   def birdDescUpload = Action { implicit request => 
     val descJsonOpt = request.body.asFormUrlEncoded.map(descJsObj)
-    descJsonOpt.map((js) => {addDesc(js); Ok(js)}).getOrElse(BadRequest("Incorrect fields"))
+    descJsonOpt.map((js) => {saveDesc(js); Ok(js)}).getOrElse(BadRequest("Incorrect fields"))
     }
+  
+  def birdRemove = Action{implicit request =>
+      val descJsonOpt = request.body.asFormUrlEncoded.map(descJsObj)
+      descJsonOpt.map((js) => {removDesc(js); Ok(js)}).getOrElse(BadRequest("Incorrect fields"))  
+    }
+  
+      
+  val (out, channel) = Concurrent.broadcast[JsValue]  
+    
+  def logs = Action {
+      implicit request => {         
+          
+          Ok.feed(out &> EventSource()).as("text/event-stream")
+      }
+      
+  }
+
 }
 

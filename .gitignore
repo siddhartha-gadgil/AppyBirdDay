@@ -13,10 +13,6 @@ packages
 *.ipr
 *.iws
 .idea/
-*.dart.js
-*.js_
-*.js.deps
-*.js.map
 logs
 project/project
 project/target
@@ -41,10 +37,6 @@ packages
 *.ipr
 *.iws
 .idea/
-*.dart.js
-*.js_
-*.js.deps
-*.js.map
 .cache
 *.exe
 *.jar
