@@ -504,6 +504,7 @@ List<Element> colourquerySelector(List<String> colours, Features features, [bool
     querySelector('#size').children = [sizeInput(features, false)];
     
     querySelector('#colour_list').children = colourquerySelector(mainColours, features, false);
+<<<<<<< HEAD
     
     querySelector('#other_colour_list').children = colourquerySelector(otherColours, features, false);
     

@@ -24,7 +24,6 @@ POST	/birdDescUpload				controllers.Application.birdDescUpload
 
 POST 	/birdRemove					controllers.Application.birdRemove
 
-
 GET		/birdDescs					controllers.Application.birdDesc	
 
 GET		/logs						controllers.Application.logs
