@@ -114,12 +114,13 @@ object DataStore extends Controller with MongoController {
 	def saveDesc(desc: JsObject) = { 
 	  birdDescColl.save(desc)
 	  channel.push(desc)
+	  println("boing")
 	}
 	
 	def removDesc(id: JsObject) = birdDescColl.remove(id)
 	
     def birdDescs = birdDescColl.find(all).cursor[JsObject].toList.map(Json.toJson(_))
     
-    val (out, channel) = Concurrent.broadcast[JsValue]
+    val (boingout, channel) = Concurrent.broadcast[JsValue]
 }
 

@@ -77,13 +77,12 @@ object Application extends Controller{
       descJsonOpt.map((js) => {removDesc(js); Ok(js)}).getOrElse(BadRequest("Incorrect fields"))  
     }
   
-      
-  val (out, channel) = Concurrent.broadcast[JsValue]  
+        
     
   def logs = Action {
       implicit request => {         
           
-          Ok.feed(out &> EventSource()).as("text/event-stream")
+          Ok.feed(boingout &> EventSource()).as("text/event-stream")
       }
       
   }
