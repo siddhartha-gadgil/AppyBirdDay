@@ -52,7 +52,9 @@ object Application extends Controller{
                                         
   def bestBirds = List(egBird, egBird, egBird)
   
-  def index = query
+  def index = Action{
+    Redirect("/web/appybirddaydart.html")
+  }
   
   def birdRace2011Load = {abundanceInsert(brdRace); "bird race results loaded"}
   

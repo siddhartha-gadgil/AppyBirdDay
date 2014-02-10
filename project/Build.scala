@@ -5,8 +5,8 @@ import play.Project._
 object ApplicationBuild extends Build {
 
   val appName         = "AppyBirdDay"
-  val appVersion      = "1.0-SNAPSHOT"
-//	val scalaVersion		= "2.10.1"
+  val appVersion      = "0.3"
+	val scalaVersion		= "2.10.1"
 
   val appDependencies = Seq(
 	"org.reactivemongo" %% "play2-reactivemongo" % "0.9",

@@ -16,6 +16,10 @@ h1, p {
 input {
   float: right
   }
+  
+input[type ="range"]{
+  float: left;
+}
 
 .leftmargin{
   margin-left: 40px;
@@ -135,10 +139,25 @@ input[type='range']::-webkit-slider-thumb {
 */
 
 
+.button{
+  font-size: 16px;
+}
+
+.sizetextinp{
+  width: 27px;
+  float: right;
+  margin-left : 10px;
+}
+
 #debug  {
+  display: none;
   clear: both;
   background-color: white;
   
  height: 300px;
  overflow-y: auto;
   }
+  
+  #footbar{
+    display: none;
+    }

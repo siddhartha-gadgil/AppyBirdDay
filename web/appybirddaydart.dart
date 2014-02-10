@@ -164,7 +164,21 @@ SpanElement sizeInput(Features features, [bool rep=true]) {
        repUpdate();}
         });
   
+  var txtsz = new TextInputElement()
+      ..text = "size: "
+      ..classes.add('sizetextinp')
+      ..size = 2;
+  txtsz.onChange.listen((Event event){
+    var size = txtsz.value;
+    slider.value = size;
+    prompt.text = sizePrompt(size);
+    features.add("size", "size", size);
+    if (rep) {birdSort(features);
+    repUpdate();}
+  });
   
+  slider.children.add(txtsz);
+      
   var span = new SpanElement()
               ..children = ([prompt, slider]);
   
@@ -486,7 +500,8 @@ List<Element> colourquerySelector(List<String> colours, Features features, [bool
     behAttributes(reported);
     
     var updateButton = new ButtonElement()
-    ..text="Update Database"
+    ..text="Contribute descriptions to the database"
+    ..classes.add("button")
     ..onClick.listen((e) => descInput(birdIds));
     querySelector('#topbar').children = [updateButton];
     
@@ -516,7 +531,8 @@ List<Element> colourquerySelector(List<String> colours, Features features, [bool
     behDescAttributes(features);
     
     var identButton = new ButtonElement()
-    ..text="Identify Bird"
+    ..text="Return to Bird identification"
+    ..classes.add("button")
     ..onClick.listen((e) => repQueries());
     querySelector('#topbar').children = [identButton];
     
@@ -670,10 +686,10 @@ List<Element> colourquerySelector(List<String> colours, Features features, [bool
 
 void main() {
   
-  var sse = new EventSource("../logs")..onMessage.listen((event) => debugOut('boing'+event.data));
+//  var sse = new EventSource("../logs")..onMessage.listen((event) => debugOut('boing'+event.data));
   
-  querySelector('#cleartrace').onClick.listen((event) =>
-      querySelector('#debugOut').children = []);
+//  querySelector('#cleartrace').onClick.listen((event) =>
+//      querySelector('#debugOut').children = []);
   
   if (!local) {
     HttpRequest.getString("../abundances").then((s){
