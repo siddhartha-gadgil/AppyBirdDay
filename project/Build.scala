@@ -11,6 +11,7 @@ object ApplicationBuild extends Build {
   val appDependencies = Seq(
 	"org.reactivemongo" %% "play2-reactivemongo" % "0.9",
     // Add your project dependencies here,
+	"org.ccil.cowan.tagsoup" % "tagsoup" % "1.2",
     jdbc,
     anorm
   )

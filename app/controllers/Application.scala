@@ -56,14 +56,15 @@ object Application extends Controller{
     Redirect("/web/appybirddaydart.html")
   }
   
-  def birdRace2011Load = {abundanceInsert(brdRace); "bird race results loaded"}
+//  def birdRace2011Load = {abundanceInsert(brdRace); "bird race results loaded"}
   
-  def birdRace2011UpLoad = Action { Ok(birdRace2011Load)}
+  def birdRace2011UpLoad = TODO //Action { Ok(birdRace2011Load)}
   
   def abundanceView = Action {Async{abundanceJsonList map (Ok(_)) }}
   
-  def wikiUploadAction = Action{Async{
+  def wikiUploadAction = TODO /*Action{Async{
     wikiUpload map (_ => Ok("Uploaded wiki data"))}}
+  */
   
   def wikiData = Action{Async(wikiDataBirds.map(Ok(_)))}
   

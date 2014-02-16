@@ -91,7 +91,7 @@ object DataStore extends Controller with MongoController {
 	
 	def abundanceInsert(abDat: AbundanceData) = abundanceDataColl.insert(abDat)
 																	
-	val brdRace = models.BirdRace.Bangalore2011.upload
+	// val brdRace = models.BirdRace.Bangalore2011.upload
 	
 	
 	def wikiDataColl: JSONCollection = db.collection[JSONCollection]("WikiData")
