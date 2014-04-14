@@ -27,6 +27,11 @@ dist
 /.project
 /RUNNING_PID
 /.settings
+dump/
+activator*
+test/
+bin/
+packages/AppyBirdDayDart
 *~
 .target/
 *.zip

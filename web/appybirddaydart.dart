@@ -366,7 +366,7 @@ UListElement checkboxList(String group, List<String> names, Features features, [
       ulist.children.add(checkboxChoose(group, name, features, rep));
   });
   return ulist;
-}
+} 
 
 void repUpdate(){
   querySelector("#rep").text = reported.features.toString()+"\n"+descrips.display();
