@@ -7,7 +7,6 @@ src_managed/
 project/boot/
 project/plugins/project/
 .scala_dependencies
-packages
 .project
 *.iml
 *.ipr
@@ -28,10 +27,14 @@ dist
 /.project
 /RUNNING_PID
 /.settings
+dump/
+activator*
+test/
+bin/
+packages/AppyBirdDayDart
 *~
 .target/
 *.zip
-packages
 .project
 *.iml
 *.ipr
