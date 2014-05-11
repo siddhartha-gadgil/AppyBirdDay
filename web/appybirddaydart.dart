@@ -686,24 +686,24 @@ List<Element> colourquerySelector(List<String> colours, Features features, [bool
 
 void main() {
   
-//  var sse = new EventSource("../logs")..onMessage.listen((event) => debugOut('boing'+event.data));
+//  var sse = new EventSource("../../logs")..onMessage.listen((event) => debugOut('boing'+event.data));
   
 //  querySelector('#cleartrace').onClick.listen((event) =>
 //      querySelector('#debugOut').children = []);
   
   if (!local) {
-    HttpRequest.getString("../abundances").then((s){
+    HttpRequest.getString("../../abundances").then((s){
       birdrace = JSON.decode(s)[0]["abundance"];
       //   debugOut(birdrace.toString());
     }   
     ).then((p){
-  HttpRequest.getString("../wikidata").then((s){
+  HttpRequest.getString("../../wikidata").then((s){
     wikiData = JSON.decode(s);
     birdIds = (wikiData.map((f) => new BirdId.fromMap(f))).toList();
     birdSort(new Features.empty());
 //    querySelector("#rep").text=birdIds.length.toString();
   }).then((e){  
-  HttpRequest.getString("../birdDescs").then((s){
+  HttpRequest.getString("../../birdDescs").then((s){
     List<Map<String, String>> rawDescs = JSON.decode(s);
     rawDescs.forEach((d) => descrips.add(getBird(d), 
         d['group'], d['attr'], d['value']));          
