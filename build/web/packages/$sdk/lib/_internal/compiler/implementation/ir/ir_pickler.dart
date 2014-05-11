@@ -28,7 +28,7 @@ part 'ir_unpickler.dart';
  *
  * pickle   ::= int(entries) function
  *
- * function ::= int(endSourceOffset) int(namePosition) node(body)
+ * function ::= int(parameter count) {element(parameter)} node(body)
  *
  * int      ::= see [writeInt] for number encoding
  *
@@ -36,11 +36,11 @@ part 'ir_unpickler.dart';
  *            | byte(STRING_UTF8) int(length) {byte(utf8)}
  *
  * node      ::= byte(NODE_CONSTANT) constant node(next)
- *             | byte(NODE_LET_CONT) node(next) node(body)
+ *             | byte(NODE_LET_CONT) int(parameter count) node(next) node(body)
  *             | byte(NODE_INVOKE_STATIC) element selector
  *                   reference(continuation) {reference(argument)}
  *             | byte(NODE_INVOKE_CONTINUATION) reference(continuation)
- *                   reference(argument)
+ *                   {reference(argument)}
  *
  * reference ::= int(indexDelta)
  *
@@ -68,10 +68,12 @@ class Pickles {
 
   static const int FIRST_NODE_TAG           = STRING_UTF8 + 1;
   static const int NODE_CONSTANT            = FIRST_NODE_TAG;
-  static const int NODE_LET_CONT            = NODE_CONSTANT + 1;
+  static const int NODE_IS_TRUE             = NODE_CONSTANT + 1;
+  static const int NODE_LET_CONT            = NODE_IS_TRUE + 1;
   static const int NODE_INVOKE_STATIC       = NODE_LET_CONT + 1;
   static const int NODE_INVOKE_CONTINUATION = NODE_INVOKE_STATIC + 1;
-  static const int LAST_NODE_TAG            = NODE_INVOKE_CONTINUATION;
+  static const int NODE_BRANCH              = NODE_INVOKE_CONTINUATION + 1;
+  static const int LAST_NODE_TAG            = NODE_BRANCH;
 
   static const int FIRST_CONST_TAG      = LAST_NODE_TAG + 1;
   static const int CONST_BOOL           = FIRST_CONST_TAG;
@@ -168,12 +170,12 @@ class Pickler extends ir.Visitor {
    */
   ByteData doubleData = new ByteData(8);
 
-  List<int> pickle(ir.Function function) {
+  List<int> pickle(ir.FunctionDefinition function) {
     data = new Uint8List(INITIAL_SIZE);
     offset = 0;
     emitted = <Object, int>{};
     index = 0;
-    function.accept(this);
+    visit(function);
 
     int sizeOffset = offset;
     writeInt(emitted.length);
@@ -282,10 +284,10 @@ class Pickler extends ir.Visitor {
     writeInt(index - entryIndex);
   }
 
-  void writeBackReferenceList(List entries) {
-    writeInt(entries.length);
-    for (int i = 0; i < entries.length; i++) {
-      writeBackReference(entries[i]);
+  void writeBackReferenceList(int length, Iterable entries) {
+    writeInt(length);
+    for (var x in entries) {
+      writeBackReference(x);
     }
   }
 
@@ -356,19 +358,22 @@ class Pickler extends ir.Visitor {
     }
   }
 
-  void visitFunction(ir.Function node) {
-    writeInt(node.endOffset);
-    writeInt(node.namePosition);
+  void visitFunctionDefinition(ir.FunctionDefinition node) {
     // The continuation parameter is bound in the body.
     recordForBackReference(node.returnContinuation);
-    node.body.accept(this);
+    writeInt(node.parameters.length);
+    for (var parameter in node.parameters) {
+      recordForBackReference(parameter);
+      writeElement(parameter.element);
+    }
+    visit(node.body);
   }
 
   void visitLetPrim(ir.LetPrim node) {
-    node.primitive.accept(this);
+    visit(node.primitive);
     // The right-hand side is bound in the body.
     recordForBackReference(node.primitive);
-    node.body.accept(this);
+    visit(node.body);
   }
 
   void visitLetCont(ir.LetCont node) {
@@ -378,12 +383,13 @@ class Pickler extends ir.Visitor {
     // LetCont contexts is in the continuation body, the continuation should be
     // written second.
     writeByte(Pickles.NODE_LET_CONT);
+    writeInt(node.continuation.parameters.length);
     // The continuation is bound in the body.
     recordForBackReference(node.continuation);
-    node.body.accept(this);
-    // The continuation parameter is bound in the continuation's body.
-    recordForBackReference(node.continuation.parameter);
-    node.continuation.body.accept(this);
+    visit(node.body);
+    // The continuation parameters are bound in the continuation's body.
+    node.continuation.parameters.forEach(recordForBackReference);
+    visit(node.continuation.body);
   }
 
   void visitInvokeStatic(ir.InvokeStatic node) {
@@ -393,19 +399,32 @@ class Pickler extends ir.Visitor {
     // TODO(lry): compact encoding when the arity of the selector and the
     // arguments list are the same
     writeBackReference(node.continuation.definition);
-    writeBackReferenceList(node.arguments.map(
-        (a) => a.definition).toList(growable: false));
+    writeBackReferenceList(node.arguments.length,
+                           node.arguments.map((a) => a.definition));
   }
 
   void visitInvokeContinuation(ir.InvokeContinuation node) {
     writeByte(Pickles.NODE_INVOKE_CONTINUATION);
     writeBackReference(node.continuation.definition);
-    writeBackReference(node.argument.definition);
+    writeBackReferenceList(node.arguments.length,
+                           node.arguments.map((a) => a.definition));
+  }
+
+  void visitBranch(ir.Branch node) {
+    writeByte(Pickles.NODE_BRANCH);
+    visit(node.condition);
+    writeBackReference(node.trueContinuation.definition);
+    writeBackReference(node.falseContinuation.definition);
   }
 
   void visitConstant(ir.Constant node) {
     writeByte(Pickles.NODE_CONSTANT);
     node.value.accept(constantPickler);
+  }
+
+  void visitIsTrue(ir.IsTrue node) {
+    writeByte(Pickles.NODE_IS_TRUE);
+    writeBackReference(node.value.definition);
   }
 
   void visitNode(ir.Node node) {

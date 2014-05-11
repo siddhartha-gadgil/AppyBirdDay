@@ -537,8 +537,27 @@ abstract class NativeEnqueuerBase implements NativeEnqueuer {
 
 class NativeResolutionEnqueuer extends NativeEnqueuerBase {
 
+  Map<String, ClassElement> tagOwner = new Map<String, ClassElement>();
+
   NativeResolutionEnqueuer(Enqueuer world, Compiler compiler)
     : super(world, compiler, compiler.enableNativeLiveTypeAnalysis);
+
+  void processNativeClass(ClassElement classElement) {
+    super.processNativeClass(classElement);
+
+    // Since we map from dispatch tags to classes, a dispatch tag must be used
+    // on only one native class.
+    for (String tag in nativeTagsOfClass(classElement)) {
+      ClassElement owner = tagOwner[tag];
+      if (owner != null) {
+        compiler.reportError(classElement,
+            MessageKind.GENERIC,
+            {'text': "Tag '$tag' already in use by '${owner.name}'"});
+      } else {
+        tagOwner[tag] = classElement;
+      }
+    }
+  }
 
   void logSummary(log(message)) {
     log('Resolved ${registeredClasses.length} native elements used, '
@@ -748,9 +767,9 @@ class NativeBehavior {
   /// [DartType]s or [SpecialType]s instantiated by the native element.
   final List typesInstantiated = [];
 
-  // If this behavior is for a JS expression, [codeAst] contains the
+  // If this behavior is for a JS expression, [codeTemplate] contains the
   // parsed tree.
-  js.Expression codeAst;
+  js.Template codeTemplate;
 
   final SideEffects sideEffects = new SideEffects.empty();
 
@@ -781,8 +800,8 @@ class NativeBehavior {
     }
 
     var behavior = new NativeBehavior();
-    behavior.codeAst = js.js.parseForeignJS(code.dartString.slowToString());
-    new SideEffectsVisitor(behavior.sideEffects).visit(behavior.codeAst);
+    behavior.codeTemplate = js.js.parseForeignJS(code.dartString.slowToString());
+    new SideEffectsVisitor(behavior.sideEffects).visit(behavior.codeTemplate.ast);
 
     String specString = specLiteral.dartString.slowToString();
     // Various things that are not in fact types.
@@ -1048,6 +1067,22 @@ String checkForNativeClass(ElementListener listener) {
   return nativeTagInfo;
 }
 
+// The tags string contains comma-separated 'words' which are either dispatch
+// tags (having JavaScript identifier syntax) and directives that begin with
+// `!`.
+List<String> nativeTagsOfClassRaw(ClassElement cls) {
+  String quotedName = cls.nativeTagInfo;
+  return quotedName.substring(1, quotedName.length - 1).split(',');
+}
+
+List<String> nativeTagsOfClass(ClassElement cls) {
+  return nativeTagsOfClassRaw(cls).where((s) => !s.startsWith('!')).toList();
+}
+
+bool nativeTagsForcedNonLeaf(ClassElement cls) =>
+    nativeTagsOfClassRaw(cls).contains('!nonleaf');
+
+
 final RegExp nativeRedirectionRegExp = new RegExp(r'^[a-zA-Z][a-zA-Z_$0-9]*$');
 
 void handleSsaNative(SsaBuilder builder, Expression nativeBody) {
@@ -1127,8 +1162,14 @@ void handleSsaNative(SsaBuilder builder, Expression nativeBody) {
                                      'Unexpected kind: "${element.kind}".');
     }
 
-    builder.push(new HForeign(js.js(nativeMethodCall), backend.dynamicType,
-                              inputs, effects: new SideEffects()));
+    builder.push(
+        new HForeign(
+            // TODO(sra): This could be cached.  The number of templates should
+            // be proportional to the number of native methods, which is bounded
+            // by the dart: libraries.
+            js.js.uncachedExpressionTemplate(nativeMethodCall),
+            backend.dynamicType,
+            inputs, effects: new SideEffects()));
     builder.close(new HReturn(builder.pop())).addSuccessor(builder.graph.exit);
   } else {
     if (parameters.parameterCount != 0) {
@@ -1138,7 +1179,8 @@ void handleSsaNative(SsaBuilder builder, Expression nativeBody) {
     }
     LiteralString jsCode = nativeBody.asLiteralString();
     builder.push(new HForeign.statement(
-        new js.LiteralStatement(jsCode.dartString.slowToString()),
+        js.js.statementTemplateYielding(
+            new js.LiteralStatement(jsCode.dartString.slowToString())),
         <HInstruction>[],
         new SideEffects(),
         null,

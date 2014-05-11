@@ -10,7 +10,6 @@ import '../compiler.dart' as api;
 import 'dart2jslib.dart' as leg;
 import 'tree/tree.dart' as tree;
 import 'elements/elements.dart' as elements;
-import 'ssa/tracer.dart' as ssa;
 import '../../libraries.dart';
 import 'source_file.dart';
 
@@ -35,8 +34,6 @@ class Compiler extends leg.Compiler {
       : this.options = options,
         this.allowedLibraryCategories = getAllowedLibraryCategories(options),
         super(
-            tracer: new ssa.HTracer(
-                ssa.GENERATE_SSA_TRACE ? outputProvider('dart', 'cfg') : null),
             outputProvider: outputProvider,
             enableTypeAssertions: hasOption(options, '--enable-checked-mode'),
             enableUserAssertions: hasOption(options, '--enable-checked-mode'),
@@ -65,7 +62,9 @@ class Compiler extends leg.Compiler {
                 options, '--build-id=',
                 "build number could not be determined"),
             showPackageWarnings:
-                hasOption(options, '--show-package-warnings')) {
+                hasOption(options, '--show-package-warnings'),
+            useContentSecurityPolicy: hasOption(options, '--csp'),
+            suppressWarnings: hasOption(options, '--suppress-warnings')) {
     if (!libraryRoot.path.endsWith("/")) {
       throw new ArgumentError("libraryRoot must end with a /");
     }

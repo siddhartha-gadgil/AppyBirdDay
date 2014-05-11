@@ -247,18 +247,55 @@ abstract class Element implements Spannable {
 
   FunctionElement asFunctionElement();
 
+  /// Is [:true:] if this element has a corresponding patch.
+  ///
+  /// If [:true:] this element has a non-null [patch] field.
+  ///
+  /// See [:patch_parser.dart:] for a description of the terminology.
   bool get isPatched;
+
+  /// Is [:true:] if this element is a patch.
+  ///
+  /// If [:true:] this element has a non-null [origin] field.
+  ///
+  /// See [:patch_parser.dart:] for a description of the terminology.
   bool get isPatch;
+
+  /// Is [:true:] if this element defines the implementation for the entity of
+  /// this element.
+  ///
+  /// See [:patch_parser.dart:] for a description of the terminology.
   bool get isImplementation;
+
+  /// Is [:true:] if this element introduces the entity of this element.
+  ///
+  /// See [:patch_parser.dart:] for a description of the terminology.
   bool get isDeclaration;
+
+  /// Returns the element which defines the implementation for the entity of
+  /// this element.
+  ///
+  /// See [:patch_parser.dart:] for a description of the terminology.
+  Element get implementation;
+
+  /// Returns the element which introduces the entity of this element.
+  ///
+  /// See [:patch_parser.dart:] for a description of the terminology.
+  Element get declaration;
+
+  /// Returns the patch for this element if this element is patched.
+  ///
+  /// See [:patch_parser.dart:] for a description of the terminology.
+  Element get patch;
+
+  /// Returns the origin for this element if this element is a patch.
+  ///
+  /// See [:patch_parser.dart:] for a description of the terminology.
+  Element get origin;
+
   bool get isSynthesized;
   bool get isForwardingConstructor;
   bool get isMixinApplication;
-
-  Element get implementation;
-  Element get declaration;
-  Element get patch;
-  Element get origin;
 
   bool hasFixedBackendName();
   String fixedBackendName();
@@ -761,8 +798,6 @@ abstract class TypedefElement extends Element
   FunctionSignature get functionSignature;
   Link<DartType> get typeVariables;
 
-  bool get isResolved;
-
   // TODO(kasperl): Try to get rid of these setters.
   void set alias(DartType value);
   void set functionSignature(FunctionSignature value);
@@ -833,6 +868,10 @@ abstract class FunctionElement extends Element
 
   bool get isRedirectingFactory;
 
+  /// Used to retrieve a link to the abstract field element representing this
+  /// element.
+  AbstractFieldElement get abstractField;
+
   /**
    * Compute the type of the target of a constructor for an instantiation site
    * with type [:newType:].
@@ -840,8 +879,6 @@ abstract class FunctionElement extends Element
   InterfaceType computeTargetType(InterfaceType newType);
 
   // TODO(kasperl): These are bit fishy. Do we really need them?
-  void set patch(FunctionElement value);
-  void set origin(FunctionElement value);
   void set defaultImplementation(FunctionElement value);
 
   /// Do not use [computeSignature] outside of the resolver; instead retrieve
@@ -872,6 +909,8 @@ abstract class TypeDeclarationElement extends Element {
    * [computeType].
    */
   Link<DartType> get typeVariables;
+
+  bool get isResolved;
 }
 
 abstract class ClassElement extends TypeDeclarationElement
@@ -901,7 +940,6 @@ abstract class ClassElement extends TypeDeclarationElement
 
   int get supertypeLoadState;
   int get resolutionState;
-  bool get isResolved;
   String get nativeTagInfo;
 
   bool get isMixinApplication;
@@ -912,8 +950,6 @@ abstract class ClassElement extends TypeDeclarationElement
   // TODO(kasperl): These are bit fishy. Do we really need them?
   void set supertype(DartType value);
   void set interfaces(Link<DartType> value);
-  void set patch(ClassElement value);
-  void set origin(ClassElement value);
   void set supertypeLoadState(int value);
   void set resolutionState(int value);
   void set nativeTagInfo(String value);
@@ -1041,6 +1077,7 @@ abstract class TypeVariableElement extends Element implements TypedElement {
 }
 
 abstract class MetadataAnnotation implements Spannable {
+  /// The front-end constant of this metadata annotation.
   Constant get value;
   Element get annotatedElement;
   int get resolutionState;
@@ -1049,11 +1086,11 @@ abstract class MetadataAnnotation implements Spannable {
 
   // TODO(kasperl): Try to get rid of these.
   void set annotatedElement(Element value);
-  void set resolutionState(int value);
 
   MetadataAnnotation ensureResolved(Compiler compiler);
 }
 
+// TODO(johnniwinther): Remove this element.
 abstract class VoidElement extends Element {}
 
 /// An [Element] that has a type.
@@ -1132,5 +1169,12 @@ abstract class Member extends MemberSignature {
   /// Returns `true` if this member is a getter or setter implicitly declared
   /// by a field.
   bool get isDeclaredByField;
+
+  /// Returns `true` if this member is abstract.
+  bool get isAbstract;
+
+  /// If abstract, [implementation] points to the overridden concrete member,
+  /// if any. Otherwise [implementation] points to the member itself.
+  Member get implementation;
 }
 

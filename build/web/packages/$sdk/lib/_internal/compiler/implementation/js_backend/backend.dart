@@ -52,7 +52,6 @@ class FunctionInlineCache {
   }
 }
 
-
 class JavaScriptBackend extends Backend {
   SsaBuilderTask builder;
   SsaOptimizerTask optimizer;
@@ -102,6 +101,8 @@ class JavaScriptBackend extends Backend {
   ClassElement mapLiteralClass;
   ClassElement constMapLiteralClass;
   ClassElement typeVariableClass;
+  Element mapLiteralConstructor;
+  Element mapLiteralConstructorEmpty;
 
   ClassElement noSideEffectsClass;
   ClassElement noThrowsClass;
@@ -288,19 +289,30 @@ class JavaScriptBackend extends Backend {
   /// constructors for custom elements.
   CustomElementsAnalysis customElementsAnalysis;
 
+  JavaScriptConstantTask constantCompilerTask;
+
   JavaScriptBackend(Compiler compiler, bool generateSourceMap)
       : namer = determineNamer(compiler),
         oneShotInterceptors = new Map<String, Selector>(),
         interceptedElements = new Map<String, Set<Element>>(),
         rti = new RuntimeTypes(compiler),
         specializedGetInterceptors = new Map<String, Set<ClassElement>>(),
-        super(compiler, JAVA_SCRIPT_CONSTANT_SYSTEM) {
+        super(compiler) {
     emitter = new CodeEmitterTask(compiler, namer, generateSourceMap);
     builder = new SsaBuilderTask(this);
     optimizer = new SsaOptimizerTask(this);
     generator = new SsaCodeGeneratorTask(this);
     typeVariableHandler = new TypeVariableHandler(this);
     customElementsAnalysis = new CustomElementsAnalysis(this);
+    constantCompilerTask = new JavaScriptConstantTask(compiler);
+  }
+
+  ConstantSystem get constantSystem => constants.constantSystem;
+
+  /// Returns constant environment for the JavaScript interpretation of the
+  /// constants.
+  JavaScriptConstantCompiler get constants {
+    return constantCompilerTask.jsConstantCompiler;
   }
 
   static Namer determineNamer(Compiler compiler) {
@@ -546,6 +558,8 @@ class JavaScriptBackend extends Backend {
         ..add(jsNullClass);
 
     validateInterceptorImplementsAllObjectMethods(jsInterceptorClass);
+    // The null-interceptor must also implement *all* methods.
+    validateInterceptorImplementsAllObjectMethods(jsNullClass);
 
     typeVariableClass = compiler.findHelper('TypeVariable');
 
@@ -571,7 +585,7 @@ class JavaScriptBackend extends Backend {
       Element interceptorMember = interceptorClass.lookupMember(member.name);
       // Interceptors must override all Object methods due to calling convention
       // differences.
-      assert(interceptorMember.getEnclosingClass() != compiler.objectClass);
+      assert(interceptorMember.getEnclosingClass() == interceptorClass);
     });
   }
 
@@ -728,7 +742,6 @@ class JavaScriptBackend extends Backend {
         // For map literals, the dependency between the implementation class
         // and [Map] is not visible, so we have to add it manually.
         rti.registerRtiDependency(mapLiteralClass, cls);
-        enqueueInResolution(getMapMaker(), elements);
       } else if (cls == compiler.boundClosureClass) {
         // TODO(ngeoffray): Move the bound closure class in the
         // backend.
@@ -737,6 +750,27 @@ class JavaScriptBackend extends Backend {
         enqueue(enqueuer, getNativeInterceptorMethod, elements);
         enqueueClass(enqueuer, jsInterceptorClass, compiler.globalDependencies);
         enqueueClass(enqueuer, jsPlainJavaScriptObjectClass, elements);
+      } else if (cls == mapLiteralClass) {
+        // For map literals, the dependency between the implementation class
+        // and [Map] is not visible, so we have to add it manually.
+        Element getFactory(String name, int arity) {
+          // The constructor is on the patch class, but dart2js unit tests don't
+          // have a patch class.
+          ClassElement implementation = cls.patch != null ? cls.patch : cls;
+          return implementation.lookupConstructor(
+            new Selector.callConstructor(
+                name, mapLiteralClass.getLibrary(), arity),
+            (element) {
+              compiler.internalError(mapLiteralClass,
+                  "Map literal class $mapLiteralClass missing "
+                  "'$name' constructor"
+                  "  ${mapLiteralClass.constructors}");
+            });
+        }
+        mapLiteralConstructor = getFactory('_literal', 1);
+        mapLiteralConstructorEmpty = getFactory('_empty', 0);
+        enqueueInResolution(mapLiteralConstructor, elements);
+        enqueueInResolution(mapLiteralConstructorEmpty, elements);
       }
     }
     if (cls == compiler.closureClass) {
@@ -1033,6 +1067,12 @@ class JavaScriptBackend extends Backend {
     enqueueInResolution(getFallThroughError(), elements);
   }
 
+  void registerCheckDeferredIsLoaded(TreeElements elements) {
+    enqueueInResolution(getCheckDeferredIsLoaded(), elements);
+    // Also register the types of the arguments passed to this method.
+    enqueueClass(compiler.enqueuer.resolution, compiler.stringClass, elements);
+  }
+
   void enableNoSuchMethod(Enqueuer world) {
     enqueue(world, getCreateInvocationMirror(), compiler.globalDependencies);
     world.registerInvocation(compiler.noSuchMethodSelector);
@@ -1072,7 +1112,8 @@ class JavaScriptBackend extends Backend {
     assert(element.name == Compiler.NO_SUCH_METHOD);
     ClassElement classElement = element.getEnclosingClass();
     return classElement == compiler.objectClass
-        || classElement == jsInterceptorClass;
+        || classElement == jsInterceptorClass
+        || classElement == jsNullClass;
   }
 
   bool isDefaultEqualityImplementation(Element element) {
@@ -1142,12 +1183,10 @@ class JavaScriptBackend extends Backend {
       return;
     }
     if (kind.category == ElementCategory.VARIABLE) {
-      Constant initialValue =
-          compiler.constantHandler.getConstantForVariable(element);
+      Constant initialValue = constants.getConstantForVariable(element);
       if (initialValue != null) {
         registerCompileTimeConstant(initialValue, work.resolutionTree);
-        compiler.constantHandler.addCompileTimeConstantForEmission(
-            initialValue);
+        constants.addCompileTimeConstantForEmission(initialValue);
         // We don't need to generate code for static or top-level
         // variables. For instance variables, we may need to generate
         // the checked setter.
@@ -1223,15 +1262,6 @@ class JavaScriptBackend extends Backend {
     for (ClassElement dartClass in implementationClasses.keys) {
       if (element == implementationClasses[dartClass]) {
         return dartClass;
-      }
-    }
-    return element;
-  }
-
-  Element getImplementationClass(Element element) {
-    for (ClassElement dartClass in implementationClasses.keys) {
-      if (element == dartClass) {
-        return implementationClasses[dartClass];
       }
     }
     return element;
@@ -1448,10 +1478,6 @@ class JavaScriptBackend extends Backend {
     return compiler.findHelper('getTraceFromException');
   }
 
-  Element getMapMaker() {
-    return compiler.findHelper('makeLiteralMap');
-  }
-
   Element getSetRuntimeTypeInfo() {
     return compiler.findHelper('setRuntimeTypeInfo');
   }
@@ -1498,6 +1524,10 @@ class JavaScriptBackend extends Backend {
 
   Element getCheckSubtypeOfRuntimeType() {
     return compiler.findHelper('checkSubtypeOfRuntimeType');
+  }
+
+  Element getCheckDeferredIsLoaded() {
+    return compiler.findHelper('checkDeferredIsLoaded');
   }
 
   Element getAssertSubtypeOfRuntimeType() {
@@ -1607,8 +1637,8 @@ class JavaScriptBackend extends Backend {
     if (mustRetainMetadata && isNeededForReflection(element)) {
       for (MetadataAnnotation metadata in element.metadata) {
         metadata.ensureResolved(compiler);
-        compiler.constantHandler.addCompileTimeConstantForEmission(
-            metadata.value);
+        Constant constant = constants.getConstantForMetadata(metadata);
+        constants.addCompileTimeConstantForEmission(constant);
       }
       return true;
     }
@@ -1735,13 +1765,12 @@ class JavaScriptBackend extends Backend {
     // helper rather than reading it inside the helper to increase the
     // chance of making the dispatch record access monomorphic.
     jsAst.PropertyAccess record = new jsAst.PropertyAccess(
-        use2, new jsAst.VariableUse(dispatchPropertyName));
+        use2, js(dispatchPropertyName));
 
     List<jsAst.Expression> arguments = <jsAst.Expression>[use1, record];
-    FunctionElement helper =
-        compiler.findHelper('isJsIndexable');
-    String helperName = namer.isolateAccess(helper);
-    return new jsAst.Call(new jsAst.VariableUse(helperName), arguments);
+    FunctionElement helper = compiler.findHelper('isJsIndexable');
+    jsAst.Expression helperExpression = namer.elementAccess(helper);
+    return new jsAst.Call(helperExpression, arguments);
   }
 
   bool isTypedArray(TypeMask mask) {
@@ -1834,7 +1863,9 @@ class JavaScriptBackend extends Backend {
       if (cls == noInlineClass) {
         hasNoInline = true;
         if (VERBOSE_OPTIMIZER_HINTS) {
-          compiler.reportHere(element, "Cannot inline");
+          compiler.reportHint(element,
+              MessageKind.GENERIC,
+              {'text': "Cannot inline"});
         }
         inlineCache.markAsNonInlinable(element);
       } else if (cls == noThrowsClass) {
@@ -1845,13 +1876,17 @@ class JavaScriptBackend extends Backend {
               " or static functions");
         }
         if (VERBOSE_OPTIMIZER_HINTS) {
-          compiler.reportHere(element, "Cannot throw");
+          compiler.reportHint(element,
+              MessageKind.GENERIC,
+              {'text': "Cannot throw"});
         }
         compiler.world.registerCannotThrow(element);
       } else if (cls == noSideEffectsClass) {
         hasNoSideEffects = true;
         if (VERBOSE_OPTIMIZER_HINTS) {
-          compiler.reportHere(element, "Has no side effects");
+          compiler.reportHint(element,
+              MessageKind.GENERIC,
+              {'text': "Has no side effects"});
         }
         compiler.world.registerSideEffectsFree(element);
       }
@@ -1879,55 +1914,4 @@ class Dependency {
   final TreeElements user;
 
   const Dependency(this.constant, this.user);
-}
-
-/// Used to copy metadata to the the actual constant handler.
-class ConstantCopier implements ConstantVisitor {
-  final ConstantHandler target;
-
-  ConstantCopier(this.target);
-
-  void copy(/* Constant or List<Constant> */ value) {
-    if (value is Constant) {
-      target.compiledConstants.add(value);
-    } else {
-      target.compiledConstants.addAll(value);
-    }
-  }
-
-  void visitFunction(FunctionConstant constant) => copy(constant);
-
-  void visitNull(NullConstant constant) => copy(constant);
-
-  void visitInt(IntConstant constant) => copy(constant);
-
-  void visitDouble(DoubleConstant constant) => copy(constant);
-
-  void visitTrue(TrueConstant constant) => copy(constant);
-
-  void visitFalse(FalseConstant constant) => copy(constant);
-
-  void visitString(StringConstant constant) => copy(constant);
-
-  void visitType(TypeConstant constant) => copy(constant);
-
-  void visitInterceptor(InterceptorConstant constant) => copy(constant);
-
-  void visitDummy(DummyConstant constant) => copy(constant);
-
-  void visitList(ListConstant constant) {
-    copy(constant.entries);
-    copy(constant);
-  }
-  void visitMap(MapConstant constant) {
-    copy(constant.keys);
-    copy(constant.values);
-    copy(constant.protoValue);
-    copy(constant);
-  }
-
-  void visitConstructed(ConstructedConstant constant) {
-    copy(constant.fields);
-    copy(constant);
-  }
 }

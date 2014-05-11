@@ -45,15 +45,6 @@ class RuntimeTypes {
   Set<ClassElement> allInstantiatedArguments;
   Set<ClassElement> checkedArguments;
 
-  bool isJsNative(Element element) {
-    return (element == compiler.intClass ||
-            element == compiler.boolClass ||
-            element == compiler.numClass ||
-            element == compiler.doubleClass ||
-            element == compiler.stringClass ||
-            element == compiler.listClass);
-  }
-
   void registerRtiDependency(Element element, Element dependency) {
     // We're not dealing with typedef for now.
     if (!element.isClass() || !dependency.isClass()) return;
@@ -401,18 +392,18 @@ class RuntimeTypes {
         ..addAll(checkedArguments);
   }
 
-  /// Return the unique name for the element as an unquoted string.
-  String getJsName(Element element) {
+  String getTypeRepresentationForTypeConstant(DartType type) {
     JavaScriptBackend backend = compiler.backend;
     Namer namer = backend.namer;
-    return namer.isolateAccess(element);
-  }
-
-  String getRawTypeRepresentation(DartType type) {
-    String name = getJsName(type.element);
+    String name = namer.uniqueNameForTypeConstantElement(type.element);
     if (!type.element.isClass()) return name;
     InterfaceType interface = type;
     Link<DartType> variables = interface.element.typeVariables;
+    // Type constants can currently only be raw types, so there is no point
+    // adding ground-term type parameters, as they would just be 'dynamic'.
+    // TODO(sra): Since the result string is used only in constructing constant
+    // names, it would result in more readable names if the final string was a
+    // legal JavaScript identifer.
     if (variables.isEmpty) return name;
     String arguments =
         new List.filled(variables.slowLength(), 'dynamic').join(', ');
@@ -537,7 +528,7 @@ class RuntimeTypes {
             return type.toString();
         }).toList();
       }
-      return js.fun(parameters, js.return_(encoding));
+      return js('function(#) { return # }', [parameters, encoding]);
     }
   }
 
@@ -548,12 +539,9 @@ class RuntimeTypes {
     if (contextClass != null) {
       JavaScriptBackend backend = compiler.backend;
       String contextName = backend.namer.getNameOfClass(contextClass);
-      List<jsAst.Expression> arguments =
-          <jsAst.Expression>[encoding, this_, js.string(contextName)];
-      return js.fun([], js.return_(
-          new jsAst.Call(
-              backend.namer.elementAccess(backend.getComputeSignature()),
-              arguments)));
+      return js('function () { return #(#, #, #); }',
+          [ backend.namer.elementAccess(backend.getComputeSignature()),
+              encoding, this_, js.string(contextName) ]);
     } else {
       return encoding;
     }
@@ -638,7 +626,7 @@ class TypeRepresentationGenerator extends DartTypeVisitor {
   }
 
   jsAst.Expression getJavaScriptClassName(Element element) {
-    return js(namer.isolateAccess(backend.getImplementationClass(element)));
+    return namer.elementAccess(element);
   }
 
   visit(DartType type) {
@@ -785,9 +773,7 @@ class ArgumentCollector extends DartTypeVisitor {
   }
 
   visitInterfaceType(InterfaceType type, bool isTypeArgument) {
-    if (isTypeArgument) {
-      classes.add(backend.getImplementationClass(type.element));
-    }
+    if (isTypeArgument) classes.add(type.element);
     type.visitChildren(this, true);
   }
 
@@ -828,7 +814,7 @@ class FunctionArgumentCollector extends DartTypeVisitor {
 
   visitInterfaceType(InterfaceType type, bool inFunctionType) {
     if (inFunctionType) {
-      classes.add(backend.getImplementationClass(type.element));
+      classes.add(type.element);
     }
     type.visitChildren(this, inFunctionType);
   }
@@ -873,10 +859,10 @@ class Substitution {
     jsAst.Expression value =
         rti.getSubstitutionRepresentation(arguments, use);
     if (isFunction) {
-      List<String> formals = parameters.toList().map(declaration).toList();
-      return js.fun(formals, js.return_(value));
+      Iterable<jsAst.Expression> formals = parameters.toList().map(declaration);
+      return js('function(#) { return # }', [formals, value]);
     } else if (ensureIsFunction) {
-      return js.fun([], js.return_(value));
+      return js('function() { return # }', value);
     } else {
       return value;
     }

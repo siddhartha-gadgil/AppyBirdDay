@@ -22,8 +22,8 @@ class Unpickler {
   int index;
 
   /**
-   * This buffer is used in [readConstant] to reconstruct a double value from
-   * a sequence of bytes.
+   * This buffer is used in [readConstantValue] to reconstruct a double value
+   * from a sequence of bytes.
    */
   ByteData doubleData = new ByteData(8);
 
@@ -37,14 +37,14 @@ class Unpickler {
   ir.Expression root;
   ir.Expression current;
 
-  ir.Function unpickle(List<int> data) {
+  ir.FunctionDefinition unpickle(List<int> data) {
     this.data = data;
     offset = 0;
     int numEntries = readInt();
     unpickled = new List<Object>(numEntries);
     index = 0;
     root = current = null;
-    return readFunctionNode();
+    return readFunctionDefinition();
   }
 
   int readByte() {
@@ -121,27 +121,37 @@ class Unpickler {
   ir.Expression readExpressionNode() {
     int tag = readByte();
     switch (tag) {
+      // Nontail-position expressions.
       case Pickles.NODE_CONSTANT:
-        ir.Definition constant = readConstantNode();
+        ir.Definition constant = readConstant();
         unpickled[index++] = constant;
         addExpression(new ir.LetPrim(constant));
         break;
       case Pickles.NODE_LET_CONT:
-        ir.Parameter parameter = new ir.Parameter();
-        ir.Continuation continuation = new ir.Continuation(parameter);
+        int parameterCount = readInt();
+        List<ir.Parameter> parameters = new List<ir.Parameter>.generate(
+            parameterCount, (i) => new ir.Parameter(null));
+        ir.Continuation continuation = new ir.Continuation(parameters);
         unpickled[index++] = continuation;
         ir.Expression body = readDelimitedExpressionNode();
-        unpickled[index++] = parameter;
+        parameters.forEach((p) => unpickled[index++] = p);
         addExpression(new ir.LetCont(continuation, body));
         break;
+
+      // Tail-position expressions.
       case Pickles.NODE_INVOKE_STATIC:
-        addExpression(readInvokeStaticNode());
+        addExpression(readInvokeStatic());
         current = null;
         break;
       case Pickles.NODE_INVOKE_CONTINUATION:
-        addExpression(readInvokeContinuationNode());
+        addExpression(readInvokeContinuation());
         current = null;
         break;
+      case Pickles.NODE_BRANCH:
+        addExpression(readBranch());
+        current = null;
+        break;
+
       default:
         compiler.internalError(NO_LOCATION_SPANNABLE,
                                "Unexpected expression entry tag: $tag");
@@ -174,30 +184,36 @@ class Unpickler {
   List<ir.Definition> readBackReferenceList() {
     int length = readInt();
     List<ir.Definition> result = new List<ir.Definition>(length);
-    for (int i = 0; i < length; i++) {
+    for (int i = 0; i < length; ++i) {
       result[i] = readBackReference();
     }
     return result;
   }
 
-  ir.Function readFunctionNode() {
-    int endOffset = readInt();
-    int namePosition = readInt();
+  ir.FunctionDefinition readFunctionDefinition() {
     // There is implicitly a return continuation which can be the target of
     // back references.
     ir.Continuation continuation = new ir.Continuation.retrn();
     unpickled[index++] = continuation;
 
+    int parameterCount = readInt();
+    List<ir.Parameter> parameters = new List<ir.Parameter>.generate(
+        parameterCount,
+        (i) {
+          ir.Parameter parameter = new ir.Parameter(readElement());
+          unpickled[index++] = parameter;
+          return parameter;
+        });
     ir.Expression body = readDelimitedExpressionNode();
-    return new ir.Function(endOffset, namePosition, continuation, body);
+    return new ir.FunctionDefinition(continuation, parameters, body);
   }
 
-  ir.Constant readConstantNode() {
-    Constant constant = readConstant();
+  ir.Constant readConstant() {
+    Constant constant = readConstantValue();
     return new ir.Constant(constant);
   }
 
-  ir.InvokeStatic readInvokeStaticNode() {
+  ir.InvokeStatic readInvokeStatic() {
     FunctionElement functionElement = readElement();
     Selector selector = readSelector();
     ir.Continuation continuation = readBackReference();
@@ -206,13 +222,31 @@ class Unpickler {
                                arguments);
   }
 
-  ir.InvokeContinuation readInvokeContinuationNode() {
+  ir.InvokeContinuation readInvokeContinuation() {
     ir.Continuation continuation = readBackReference();
-    ir.Definition argument = readBackReference();
-    return new ir.InvokeContinuation(continuation, argument);
+    List<ir.Definition> arguments = readBackReferenceList();
+    return new ir.InvokeContinuation(continuation, arguments);
   }
 
-  Constant readConstant() {
+  ir.Branch readBranch() {
+    ir.Condition condition = readCondition();
+    ir.Continuation trueContinuation = readBackReference();
+    ir.Continuation falseContinuation = readBackReference();
+    return new ir.Branch(condition, trueContinuation, falseContinuation);
+  }
+
+  ir.Condition readCondition() {
+    int tag = readByte();
+    assert(tag == Pickles.NODE_IS_TRUE);
+    return readIsTrue();
+  }
+
+  ir.IsTrue readIsTrue() {
+    ir.Definition value = readBackReference();
+    return new ir.IsTrue(value);
+  }
+
+  Constant readConstantValue() {
     int tag = readByte();
     switch(tag) {
       case Pickles.CONST_BOOL:

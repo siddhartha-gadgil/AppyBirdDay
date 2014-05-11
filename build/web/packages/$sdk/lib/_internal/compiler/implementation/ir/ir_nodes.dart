@@ -7,10 +7,10 @@
 library dart2js.ir_nodes;
 
 import '../dart2jslib.dart' as dart2js show Constant;
-import '../elements/elements.dart' show FunctionElement, LibraryElement;
+import '../elements/elements.dart'
+    show FunctionElement, LibraryElement, ParameterElement;
 import 'ir_pickler.dart' show Pickler, IrConstantPool;
 import '../universe/universe.dart' show Selector, SelectorKind;
-import '../util/util.dart' show Spannable;
 
 abstract class Node {
   static int hashCount = 0;
@@ -31,6 +31,19 @@ abstract class Definition extends Node {
 
   bool get hasAtMostOneUse => firstRef == null || firstRef.nextRef == null;
   bool get hasExactlyOneUse => firstRef != null && firstRef.nextRef == null;
+  bool get hasAtLeastOneUse => firstRef != null;
+
+  void substituteFor(Definition other) {
+    if (other.firstRef == null) return;
+    Reference previous, current = other.firstRef;
+    do {
+      current.definition = this;
+      previous = current;
+      current = current.nextRef;
+    } while (current != null);
+    previous.nextRef = firstRef;
+    firstRef = other.firstRef;
+  }
 }
 
 abstract class Primitive extends Definition {
@@ -114,13 +127,37 @@ class InvokeStatic extends Expression {
 /// Invoke a continuation in tail position.
 class InvokeContinuation extends Expression {
   final Reference continuation;
-  final Reference argument;
+  final List<Reference> arguments;
 
-  InvokeContinuation(Continuation cont, Definition arg)
+  InvokeContinuation(Continuation cont, List<Definition> args)
       : continuation = new Reference(cont),
-        argument = new Reference(arg);
-
+        arguments = args.map((t) => new Reference(t)).toList(growable: false);
   accept(Visitor visitor) => visitor.visitInvokeContinuation(this);
+}
+
+/// The base class of things which can be tested and branched on.
+abstract class Condition extends Node {
+}
+
+class IsTrue extends Condition {
+  final Reference value;
+
+  IsTrue(Definition val) : value = new Reference(val);
+
+  accept(Visitor visitor) => visitor.visitIsTrue(this);
+}
+
+/// Choose between a pair of continuations based on a condition value.
+class Branch extends Expression {
+  final Condition condition;
+  final Reference trueContinuation;
+  final Reference falseContinuation;
+
+  Branch(this.condition, Continuation trueCont, Continuation falseCont)
+      : trueContinuation = new Reference(trueCont),
+        falseContinuation = new Reference(falseCont);
+
+  accept(Visitor visitor) => visitor.visitBranch(this);
 }
 
 class Constant extends Primitive {
@@ -132,7 +169,9 @@ class Constant extends Primitive {
 }
 
 class Parameter extends Primitive {
-  Parameter();
+  final ParameterElement element;
+
+  Parameter(this.element);
 
   accept(Visitor visitor) => visitor.visitParameter(this);
 }
@@ -141,53 +180,58 @@ class Parameter extends Primitive {
 /// parameter (or body) is used to represent a function's return continuation.
 /// The return continuation is bound by the Function, not by 'let cont'.
 class Continuation extends Definition {
-  final Parameter parameter;
+  final List<Parameter> parameters;
   Expression body = null;
 
-  Continuation(this.parameter);
+  Continuation(this.parameters);
 
-  Continuation.retrn() : parameter = null;
+  Continuation.retrn() : parameters = null;
 
   accept(Visitor visitor) => visitor.visitContinuation(this);
 }
 
 /// A function definition, consisting of parameters and a body.  The parameters
 /// include a distinguished continuation parameter.
-class Function extends Node {
-  final int endOffset;
-  final int namePosition;
-
+class FunctionDefinition extends Node {
   final Continuation returnContinuation;
+  final List<Parameter> parameters;
   final Expression body;
 
-  Function(this.endOffset, this.namePosition, this.returnContinuation,
-           this.body);
+  FunctionDefinition(this.returnContinuation, this.parameters, this.body);
 
   List<int> pickle(IrConstantPool constantPool) {
     return new Pickler(constantPool).pickle(this);
   }
 
-  accept(Visitor visitor) => visitor.visitFunction(this);
+  accept(Visitor visitor) => visitor.visitFunctionDefinition(this);
 }
 
 abstract class Visitor<T> {
+  T visit(Node node) => node.accept(this);
   // Abstract classes.
-  T visitNode(Node node) => node.accept(this);
+  T visitNode(Node node) => null;
   T visitExpression(Expression node) => visitNode(node);
   T visitDefinition(Definition node) => visitNode(node);
   T visitPrimitive(Primitive node) => visitDefinition(node);
+  T visitCondition(Condition node) => visitNode(node);
 
   // Concrete classes.
-  T visitFunction(Function node) => visitNode(node);
+  T visitFunctionDefinition(FunctionDefinition node) => visitNode(node);
 
+  // Expressions.
   T visitLetPrim(LetPrim node) => visitExpression(node);
   T visitLetCont(LetCont node) => visitExpression(node);
   T visitInvokeStatic(InvokeStatic node) => visitExpression(node);
   T visitInvokeContinuation(InvokeContinuation node) => visitExpression(node);
+  T visitBranch(Branch node) => visitExpression(node);
 
+  // Definitions.
   T visitConstant(Constant node) => visitPrimitive(node);
   T visitParameter(Parameter node) => visitPrimitive(node);
   T visitContinuation(Continuation node) => visitDefinition(node);
+
+  // Conditions.
+  T visitIsTrue(IsTrue node) => visitCondition(node);
 }
 
 /// Generate a Lisp-like S-expression representation of an IR node as a string.
@@ -203,54 +247,77 @@ class SExpressionStringifier extends Visitor<String> {
   String newValueName() => 'v${_valueCounter++}';
   String newContinuationName() => 'k${_continuationCounter++}';
 
-  String visitFunction(Function node) {
+  String visitFunctionDefinition(FunctionDefinition node) {
     names[node.returnContinuation] = 'return';
-    return '(Function ${node.body.accept(this)})';
+    String parameters = node.parameters
+        .map((p) {
+          String name = p.element.name;
+          names[p] = name;
+          return name;
+        })
+        .join(' ');
+    return '(FunctionDefinition ($parameters) ${visit(node.body)})';
   }
 
-  String visitLetPrim(LetPrim expr) {
+  String visitLetPrim(LetPrim node) {
     String name = newValueName();
-    names[expr.primitive] = name;
-    String value = expr.primitive.accept(this);
-    String body = expr.body.accept(this);
+    names[node.primitive] = name;
+    String value = visit(node.primitive);
+    String body = visit(node.body);
     return '(LetPrim $name $value) $body';
   }
 
-  String visitLetCont(LetCont expr) {
+  String visitLetCont(LetCont node) {
     String cont = newContinuationName();
-    String param = newValueName();
-    names[expr.continuation] = cont;
-    names[expr.continuation.parameter] = param;
-    String contBody = expr.continuation.body.accept(this);
-    String body = expr.body == null ? 'null' : expr.body.accept(this);
-    return '(LetCont ($cont $param) $contBody) $body';
+    names[node.continuation] = cont;
+    String parameters = node.continuation.parameters
+        .map((p) {
+          String name = newValueName();
+          names[p] = name;
+          return ' $name';
+        })
+       .join('');
+    String contBody = visit(node.continuation.body);
+    String body = visit(node.body);
+    return '(LetCont ($cont$parameters) $contBody) $body';
   }
 
-  String visitInvokeStatic(InvokeStatic expr) {
-    String name = expr.target.name;
-    String cont = names[expr.continuation.definition];
-    List<String> args =
-        expr.arguments.map((v) => names[v.definition]).toList(growable: false);
-    return '(InvokeStatic $name $cont ${args.join(' ')})';
+  String visitInvokeStatic(InvokeStatic node) {
+    String name = node.target.name;
+    String cont = names[node.continuation.definition];
+    String args = node.arguments.map((v) => names[v.definition]).join(' ');
+    return '(InvokeStatic $name $cont $args)';
   }
 
-  String visitInvokeContinuation(InvokeContinuation expr) {
-    String cont = names[expr.continuation.definition];
-    String arg = names[expr.argument.definition];
-    return '(InvokeContinuation $cont $arg)';
+  String visitInvokeContinuation(InvokeContinuation node) {
+    String cont = names[node.continuation.definition];
+    String args = node.arguments.map((v) => names[v.definition]).join(' ');
+    return '(InvokeContinuation $cont $args)';
   }
 
-  String visitConstant(Constant triv) {
-    return '(Constant ${triv.value})';
+  String visitBranch(Branch node) {
+    String condition = visit(node.condition);
+    String trueCont = names[node.trueContinuation.definition];
+    String falseCont = names[node.falseContinuation.definition];
+    return '(Branch $condition $trueCont $falseCont)';
   }
 
-  String visitParameter(Parameter triv) {
+  String visitConstant(Constant node) {
+    return '(Constant ${node.value})';
+  }
+
+  String visitParameter(Parameter node) {
     // Parameters are visited directly in visitLetCont.
     return '(Unexpected Parameter)';
   }
 
-  String visitContinuation(Continuation triv) {
+  String visitContinuation(Continuation node) {
     // Continuations are visited directly in visitLetCont.
     return '(Unexpected Continuation)';
+  }
+
+  String visitIsTrue(IsTrue node) {
+    String value = names[node.value.definition];
+    return '(IsTrue $value)';
   }
 }

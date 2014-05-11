@@ -23,7 +23,7 @@ num behCommonSeen = 5;
 
 num behRareSeen = -5;
 
-bool local = false;
+bool local = true;
 
 const baseURL = "en.wikipedia.org";
 

@@ -175,6 +175,7 @@ abstract class HttpServer implements Stream<HttpRequest> {
    */
   Duration idleTimeout;
 
+
   /**
    * Starts listening for HTTP requests on the specified [address] and
    * [port].
@@ -876,14 +877,8 @@ abstract class Cookie {
  *
  *     void handleGetRequest(HttpRequest req) {
  *       HttpResponse res = req.response;
- *       var body = [];
- *       req.listen((List<int> buffer) => body.add(buffer),
- *         onDone: () {
- *           res.write('Received ${body.length} for request ');
- *           res.write(' ${req.method}: ${req.uri.path}');
- *           res.close();
- *         },
- *         onError: handleError);
+ *       res.write('Received request ${req.method}: ${req.uri.path}');
+ *       res.close();
  *     }
  */
 abstract class HttpRequest implements Stream<List<int>> {
@@ -924,6 +919,8 @@ abstract class HttpRequest implements Stream<List<int>> {
 
   /**
    * The request headers.
+   *
+   * The returned [HttpHeaders] are immutable.
    */
   HttpHeaders get headers;
 
@@ -1044,12 +1041,20 @@ abstract class HttpResponse implements IOSink {
    * the official HTTP status codes use the fields from
    * [HttpStatus]. If no status code is explicitly set the default
    * value [HttpStatus.OK] is used.
+   *
+   * The status code must be set before the body is written
+   * to. Setting the status code after writing to the response body or
+   * closing the response will throw a `StateError`.
    */
   int statusCode;
 
   /**
    * Gets and sets the reason phrase. If no reason phrase is explicitly
    * set a default reason phrase is provided.
+   *
+   * The reason phrase must be set before the body is written
+   * to. Setting the reason phrase after writing to the response body
+   * or closing the response will throw a `StateError`.
    */
   String reasonPhrase;
 
@@ -1073,7 +1078,20 @@ abstract class HttpResponse implements IOSink {
   Duration deadline;
 
   /**
+   * Get or set if the [HttpResponse] should buffer output.
+   *
+   * Default value is `true`.
+   *
+   * __Note__: Disabling buffering of the output can result in very poor
+   * performance, when writing many small chunks.
+   */
+  bool bufferOutput;
+
+  /**
    * Returns the response headers.
+   *
+   * The response headers can be modified until the response body is
+   * written to or closed. After that they become immutable.
    */
   HttpHeaders get headers;
 
@@ -1104,8 +1122,12 @@ abstract class HttpResponse implements IOSink {
    *
    * This is normally used when a HTTP upgrade request is received
    * and the communication should continue with a different protocol.
+   *
+   * If [writeHeaders] is `true`, the status line and [headers] will be written
+   * to the socket before it's detached. If `false`, the socket is detached
+   * immediately, without any data written to the socket. Default is `true`.
    */
-  Future<Socket> detachSocket();
+  Future<Socket> detachSocket({bool writeHeaders: true});
 
   /**
    * Gets information about the client connection. Returns [:null:] if the
@@ -1291,6 +1313,86 @@ abstract class HttpClient {
    * See [openUrl] for details.
    */
   Future<HttpClientRequest> postUrl(Uri url);
+
+  /**
+   * Opens a HTTP connection using the PUT method.
+   *
+   * The server is specified using [host] and [port], and the path
+   * (including possible fragment and query) is specified using
+   * [path].
+   *
+   * See [open] for details.
+   */
+  Future<HttpClientRequest> put(String host, int port, String path);
+
+  /**
+   * Opens a HTTP connection using the PUT method.
+   *
+   * The URL to use is specified in [url].
+   *
+   * See [openUrl] for details.
+   */
+  Future<HttpClientRequest> putUrl(Uri url);
+
+  /**
+   * Opens a HTTP connection using the DELETE method.
+   *
+   * The server is specified using [host] and [port], and the path
+   * (including possible fragment and query) is specified using
+   * [path].
+   *
+   * See [open] for details.
+   */
+  Future<HttpClientRequest> delete(String host, int port, String path);
+
+  /**
+   * Opens a HTTP connection using the DELETE method.
+   *
+   * The URL to use is specified in [url].
+   *
+   * See [openUrl] for details.
+   */
+  Future<HttpClientRequest> deleteUrl(Uri url);
+
+  /**
+   * Opens a HTTP connection using the PATCH method.
+   *
+   * The server is specified using [host] and [port], and the path
+   * (including possible fragment and query) is specified using
+   * [path].
+   *
+   * See [open] for details.
+   */
+  Future<HttpClientRequest> patch(String host, int port, String path);
+
+  /**
+   * Opens a HTTP connection using the PATCH method.
+   *
+   * The URL to use is specified in [url].
+   *
+   * See [openUrl] for details.
+   */
+  Future<HttpClientRequest> patchUrl(Uri url);
+
+  /**
+   * Opens a HTTP connection using the HEAD method.
+   *
+   * The server is specified using [host] and [port], and the path
+   * (including possible fragment and query) is specified using
+   * [path].
+   *
+   * See [open] for details.
+   */
+  Future<HttpClientRequest> head(String host, int port, String path);
+
+  /**
+   * Opens a HTTP connection using the HEAD method.
+   *
+   * The URL to use is specified in [url].
+   *
+   * See [openUrl] for details.
+   */
+  Future<HttpClientRequest> headUrl(Uri url);
 
   /**
    * Sets the function to be called when a site is requesting
@@ -1551,7 +1653,21 @@ abstract class HttpClientRequest implements IOSink {
   int contentLength;
 
   /**
-   * Returns the request headers.
+   * Get or set if the [HttpClientRequest] should buffer output.
+   *
+   * Default value is `true`.
+   *
+   * __Note__: Disabling buffering of the output can result in very poor
+   * performance, when writing many small chunks.
+   */
+  bool bufferOutput;
+
+  /**
+   * Returns the client request headers.
+   *
+   * The client request headers can be modified until the client
+   * request body is written to or closed. After that they become
+   * immutable.
    */
   HttpHeaders get headers;
 
@@ -1588,7 +1704,7 @@ abstract class HttpClientRequest implements IOSink {
  * the data and be notified when the entire body is received.
  *
  *     new HttpClient().get('localhost', 80, '/file.txt')
- *          .then((HttpClientRequeset request) => request.close())
+ *          .then((HttpClientRequest request) => request.close())
  *          .then((HttpClientResponse response) {
  *            response.transform(UTF8.decoder).listen((contents) {
  *              // handle data
@@ -1598,22 +1714,38 @@ abstract class HttpClientRequest implements IOSink {
 abstract class HttpClientResponse implements Stream<List<int>> {
   /**
    * Returns the status code.
+   *
+   * The status code must be set before the body is written
+   * to. Setting the status code after writing to the body will throw
+   * a `StateError`.
    */
   int get statusCode;
 
   /**
    * Returns the reason phrase associated with the status code.
+   *
+   * The reason phrase must be set before the body is written
+   * to. Setting the reason phrase after writing to the body will throw
+   * a `StateError`.
    */
   String get reasonPhrase;
 
   /**
    * Returns the content length of the response body. Returns -1 if the size of
    * the response body is not known in advance.
+   *
+   * If the content length needs to be set, it must be set before the
+   * body is written to. Setting the reason phrase after writing to
+   * the body will throw a `StateError`.
    */
   int get contentLength;
 
   /**
    * Gets the persistent connection state returned by the server.
+   *
+   * if the persistent connection state needs to be set, it must be
+   * set before the body is written to. Setting the reason phrase
+   * after writing to the body will throw a `StateError`.
    */
   bool get persistentConnection;
 
@@ -1654,7 +1786,9 @@ abstract class HttpClientResponse implements Stream<List<int>> {
 
 
   /**
-   * Returns the response headers.
+   * Returns the client response headers.
+   *
+   * The client response headers are immutable.
    */
   HttpHeaders get headers;
 

@@ -27,6 +27,13 @@ const Map<String, LibraryInfo> LIBRARIES = const {
       maturity: Maturity.STABLE,
       dart2jsPatchPath: "_internal/lib/async_patch.dart"),
 
+  "_blink": const LibraryInfo(
+      "_blink/dartium/_blink_dartium.dart",
+      category: "Client",
+      implementation: true,
+      documented: false,
+      platforms: VM_PLATFORM),
+ 
   "_chrome": const LibraryInfo(
       "_chrome/dart2js/chrome_dart2js.dart",
       documented: false,
@@ -93,6 +100,10 @@ const Map<String, LibraryInfo> LIBRARIES = const {
       "mirrors/mirrors.dart",
       maturity: Maturity.UNSTABLE,
       dart2jsPatchPath: "_internal/lib/mirrors_patch.dart"),
+
+  "profiler": const LibraryInfo(
+      "profiler/profiler.dart",
+      maturity: Maturity.UNSTABLE),
 
   "nativewrappers": const LibraryInfo(
       "html/dartium/nativewrappers.dart",

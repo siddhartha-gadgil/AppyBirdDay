@@ -30,7 +30,7 @@ void _asyncRunCallbackLoop() {
 void _asyncRunCallback() {
   try {
     _asyncRunCallbackLoop();
-  } catch (e) {
+  } catch (e, s) {
     _AsyncRun._scheduleImmediate(_asyncRunCallback);
     _nextCallback = _nextCallback.next;
     rethrow;

@@ -19,7 +19,8 @@ import 'elements/modelx.dart'
          PrefixElementX,
          VoidElementX,
          AnalyzableElement,
-         DeferredLoaderGetterElementX;
+         DeferredLoaderGetterElementX,
+         SynthesizedCallMethodElementX;
 import 'js_backend/js_backend.dart' as js_backend;
 import 'native_handler.dart' as native;
 import 'scanner/scannerlib.dart';
@@ -39,6 +40,7 @@ import 'js/js.dart' as js;
 import 'deferred_load.dart' show DeferredLoadTask;
 import 'mirrors_used.dart' show MirrorUsageAnalyzerTask;
 import 'dump_info.dart';
+import 'tracer.dart' show Tracer;
 
 export 'resolution/resolution.dart' show TreeElements, TreeElementMapping;
 export 'scanner/scannerlib.dart' show isUserDefinableOperator,
@@ -51,6 +53,7 @@ export 'util/util.dart'
     show Spannable,
          CURRENT_ELEMENT_SPANNABLE,
          NO_LOCATION_SPANNABLE;
+export 'helpers/helpers.dart';
 
 part 'code_buffer.dart';
 part 'compile_time_constants.dart';

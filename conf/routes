@@ -20,6 +20,10 @@ GET		/wikidata					controllers.Application.wikiData
 
 GET		/web/*file					controllers.Assets.at(path = "/web", file)
 
+GET		/build/*file					controllers.Assets.at(path = "/build", file)
+
+GET		/packages/*file					controllers.Assets.at(path = "/packages", file)
+
 POST	/birdDescUpload				controllers.Application.birdDescUpload
 
 POST 	/birdRemove					controllers.Application.birdRemove

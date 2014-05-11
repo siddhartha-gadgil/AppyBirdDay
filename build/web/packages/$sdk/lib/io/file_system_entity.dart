@@ -104,9 +104,9 @@ class FileStat {
     var data = _statSync(path);
     if (data is OSError) return FileStat._notFound;
     return new FileStat._internal(
-        new DateTime.fromMillisecondsSinceEpoch(data[_CHANGED_TIME] * 1000),
-        new DateTime.fromMillisecondsSinceEpoch(data[_MODIFIED_TIME] * 1000),
-        new DateTime.fromMillisecondsSinceEpoch(data[_ACCESSED_TIME] * 1000),
+        new DateTime.fromMillisecondsSinceEpoch(data[_CHANGED_TIME]),
+        new DateTime.fromMillisecondsSinceEpoch(data[_MODIFIED_TIME]),
+        new DateTime.fromMillisecondsSinceEpoch(data[_ACCESSED_TIME]),
         FileSystemEntityType._lookup(data[_TYPE]),
         data[_MODE],
         data[_SIZE]);
@@ -131,9 +131,9 @@ class FileStat {
       // Unwrap the real list from the "I'm not an error" wrapper.
       List data = response[1];
       return new FileStat._internal(
-          new DateTime.fromMillisecondsSinceEpoch(data[_CHANGED_TIME] * 1000),
-          new DateTime.fromMillisecondsSinceEpoch(data[_MODIFIED_TIME] * 1000),
-          new DateTime.fromMillisecondsSinceEpoch(data[_ACCESSED_TIME] * 1000),
+          new DateTime.fromMillisecondsSinceEpoch(data[_CHANGED_TIME]),
+          new DateTime.fromMillisecondsSinceEpoch(data[_MODIFIED_TIME]),
+          new DateTime.fromMillisecondsSinceEpoch(data[_ACCESSED_TIME]),
           FileSystemEntityType._lookup(data[_TYPE]),
           data[_MODE],
           data[_SIZE]);
@@ -659,7 +659,7 @@ abstract class FileSystemEntity {
   static String _trimTrailingPathSeparators(String path) {
     // Don't handle argument errors here.
     if (path is! String) return path;
-    if (Platform.operatingSystem == 'windows') {
+    if (Platform.isWindows) {
       while (path.length > 1 &&
              (path.endsWith(Platform.pathSeparator) ||
               path.endsWith('/'))) {
@@ -677,7 +677,7 @@ abstract class FileSystemEntity {
     // Don't handle argument errors here.
     if (path is! String) return path;
     if (path.isEmpty) path = '.';
-    if (Platform.operatingSystem == 'windows') {
+    if (Platform.isWindows) {
       while (!path.endsWith(Platform.pathSeparator) && !path.endsWith('/')) {
         path = "$path${Platform.pathSeparator}";
       }

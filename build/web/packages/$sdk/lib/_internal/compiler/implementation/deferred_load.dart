@@ -5,16 +5,21 @@
 library deferred_load;
 
 import 'dart2jslib.dart' show
+    Backend,
     Compiler,
     CompilerTask,
     Constant,
     ConstructedConstant,
     MessageKind,
     StringConstant,
-    invariant;
+    invariant,
+    Backend;
 
 import 'dart_backend/dart_backend.dart' show
     DartBackend;
+
+import 'js_backend/js_backend.dart' show
+    JavaScriptBackend;
 
 import 'elements/elements.dart' show
     Element,
@@ -41,6 +46,8 @@ import 'tree/tree.dart' show
     Import,
     LiteralString,
     LiteralDartString;
+
+import 'tree/tree.dart' as ast;
 
 import 'resolution/resolution.dart' show
     TreeElements;
@@ -119,10 +126,15 @@ class DeferredLoadTask extends CompilerTask {
   /// Will be `true` if the program contains deferred libraries.
   bool splitProgram = false;
 
-  /// A mapping from the name of a [DeferredLibrary] annotation to all dependent
-  /// output units.
-  final Map<String, Set<OutputUnit>> hunksToLoad =
-      new Map<String, Set<OutputUnit>>();
+  /// A mapping from the name of a defer import to all the output units it
+  /// depends on in a list of lists to be loaded in the order they appear.
+  ///
+  /// For example {"lib1": [[lib1_lib2_lib3], [lib1_lib2, lib1_lib3],
+  /// [lib1]]} would mean that in order to load "lib1" first the hunk
+  /// lib1_lib2_lib2 should be loaded, then the hunks lib1_lib2 and lib1_lib3
+  /// can be loaded in parallel. And finally lib1 can be loaded.
+  final Map<String, List<List<OutputUnit>>> hunksToLoad =
+      new Map<String, List<List<OutputUnit>>>();
   final Map<Import, String> importDeferName = new Map<Import, String>();
 
   /// A mapping from elements and constants to their output unit. Query this via
@@ -150,6 +162,8 @@ class DeferredLoadTask extends CompilerTask {
 
   DeferredLoadTask(Compiler compiler) : super(compiler);
 
+  Backend get backend => compiler.backend;
+
   /// Returns the [OutputUnit] where [element] belongs.
   OutputUnit outputUnitForElement(Element element) {
     if (!splitProgram) return mainOutputUnit;
@@ -170,6 +184,11 @@ class DeferredLoadTask extends CompilerTask {
 
   bool isDeferred(Element element) {
     return outputUnitForElement(element) != mainOutputUnit;
+  }
+
+  /// Returns true if e1 and e2 are in the same output unit.
+  bool inSameOutputUnit(Element e1, Element e2) {
+    return outputUnitForElement(e1) == outputUnitForElement(e2);
   }
 
   /// Mark that [import] is part of the [OutputputUnit] for [element].
@@ -249,10 +268,12 @@ class DeferredLoadTask extends CompilerTask {
 
   /// Returns a [Link] of every [Import] that imports [element] into [library].
   Link<Import> _getImports(Element element, LibraryElement library) {
-    if (!element.isTopLevel()) {
+    if (element.isMember()) {
       element = element.getEnclosingClass();
     }
-
+    if (element.isAccessor()) {
+      element = (element as FunctionElement).abstractField;
+    }
     return library.getImportsFor(element);
   }
 
@@ -292,7 +313,11 @@ class DeferredLoadTask extends CompilerTask {
       if (dependency.isStatement()) continue;
       elementDependencies.add(dependency);
     }
-    constantDependencies.addAll(elements.allConstants);
+    elements.forEachConstantNode((Node n, _) {
+      // Explicitly depend on the backend constants.
+      constantDependencies.add(
+          backend.constants.getConstantForNode(n, elements));
+    });
     elementDependencies.addAll(elements.otherDependencies);
   }
 
@@ -303,11 +328,12 @@ class DeferredLoadTask extends CompilerTask {
   void _collectAllElementsAndConstantsResolvedFrom(Element element,
       Set<Element> elements,
       Set<Constant> constants) {
-    element = element.implementation;
+    // TODO(sigurdm): How is metadata on a patch-class handled?
     for (MetadataAnnotation metadata in element.metadata) {
-      if (metadata.value != null) {
-        constants.add(metadata.value);
-        elements.add(metadata.value.computeType(compiler).element);
+      Constant constant = backend.constants.getConstantForMetadata(metadata);
+      if (constant != null) {
+        constants.add(constant);
+        elements.add(constant.computeType(compiler).element);
       }
     }
     if (element.isClass()) {
@@ -419,15 +445,19 @@ class DeferredLoadTask extends CompilerTask {
         // TODO(sigurdm): The metadata should go to the right output unit.
         // For now they all go to the main output unit.
         for (MetadataAnnotation metadata in library.metadata) {
-          if (metadata.value != null) {
-            _mapDependencies(metadata.value.computeType(compiler).element,
+          Constant constant =
+              backend.constants.getConstantForMetadata(metadata);
+          if (constant != null) {
+            _mapDependencies(constant.computeType(compiler).element,
                 _fakeMainImport);
           }
         }
         for (LibraryTag tag in library.tags) {
           for (MetadataAnnotation metadata in tag.metadata) {
-            if (metadata.value != null) {
-              _mapDependencies(metadata.value.computeType(compiler).element,
+            Constant constant =
+                backend.constants.getConstantForMetadata(metadata);
+            if (constant != null) {
+              _mapDependencies(constant.computeType(compiler).element,
                   _fakeMainImport);
             }
           }
@@ -442,10 +472,25 @@ class DeferredLoadTask extends CompilerTask {
           // things to the output units for the library.
           List<MirrorUsage> mirrorUsages = mirrorsResult[library];
           if (mirrorUsages == null) continue;
+
+          void mapDependenciesIfResolved(Element element) {
+            // If there is a target for this class, but no use of mirrors the
+            // class will not be resolved. We just skip it.
+            if (element is ClassElement &&!element.isResolved) {
+              return;
+            }
+            _mapDependencies(element, deferredImport);
+          }
+
           for (MirrorUsage usage in mirrorUsages) {
             if (usage.targets != null) {
               for (Element dependency in usage.targets) {
-                _mapDependencies(dependency, deferredImport);
+                if (dependency.isLibrary()) {
+                  LibraryElement library = dependency;
+                  library.forEachLocalMember(mapDependenciesIfResolved);
+                } else {
+                  mapDependenciesIfResolved(dependency);
+                }
               }
             }
             if (usage.metaTargets != null) {
@@ -484,10 +529,14 @@ class DeferredLoadTask extends CompilerTask {
             }
           }
           if (usesMirrors) {
-            for (Link link in compiler.enqueuer.allElementsByName.values) {
-              for (Element dependency in link) {
-                _mapDependencies(dependency, deferredImport);
-              }
+            // Add all resolved elements to the output unit.
+            for (Element element in
+                compiler.enqueuer.resolution.resolvedElements.keys) {
+              _mapDependencies(element, deferredImport);
+            }
+            for (Element element in
+                compiler.mirrorDependencies.otherDependencies) {
+              _mapDependencies(element, deferredImport);
             }
           }
         }
@@ -576,8 +625,7 @@ class DeferredLoadTask extends CompilerTask {
         for (MetadataAnnotation metadata in metadatas) {
           metadata.ensureResolved(compiler);
           Element element = metadata.value.computeType(compiler).element;
-          if (metadata.value.computeType(compiler).element ==
-              deferredLibraryClass) {
+          if (element == deferredLibraryClass) {
             ConstructedConstant constant = metadata.value;
             StringConstant s = constant.fields[0];
             result = s.value.slowToString();
@@ -608,15 +656,36 @@ class DeferredLoadTask extends CompilerTask {
     for (OutputUnit outputUnit in allOutputUnits) {
       computeOutputUnitName(outputUnit);
     }
+    List sortedOutputUnits = new List.from(allOutputUnits);
+    // Sort the output units in descending order of the number of imports they
+    // include.
+
+    // The loading of the output units mut be ordered because a superclass needs
+    // to be initialized before its subclass.
+    // But a class can only depend on another class in an output unit shared by
+    // a strict superset of the imports:
+    // By contradiction: Assume a class C in output unit shared by imports in
+    // the set S1 = (lib1,.., lib_n) depends on a class D in an output unit
+    // shared by S2 such that S2 not a superset of S1. Let lib_s be a library in
+    // S1 not in S2. lib_s must depend on C, and then in turn on D therefore D
+    // is not in the right output unit.
+    sortedOutputUnits.sort((a, b) => b.imports.length - a.imports.length);
 
     // For each deferred import we find out which outputUnits to load.
     for (Import import in _allDeferredImports.keys) {
       if (import == _fakeMainImport) continue;
-      hunksToLoad[importDeferName[import]] = new Set<OutputUnit>();
-      for (OutputUnit outputUnit in allOutputUnits) {
+      hunksToLoad[importDeferName[import]] = new List<List<OutputUnit>>();
+      int lastNumberOfImports = 0;
+      List<OutputUnit> currentLastList;
+      for (OutputUnit outputUnit in sortedOutputUnits) {
         if (outputUnit == mainOutputUnit) continue;
         if (outputUnit.imports.contains(import)) {
-          hunksToLoad[importDeferName[import]].add(outputUnit);
+          if (outputUnit.imports.length != lastNumberOfImports) {
+            lastNumberOfImports = outputUnit.imports.length;
+            currentLastList = new List<OutputUnit>();
+            hunksToLoad[importDeferName[import]].add(currentLastList);
+          }
+          currentLastList.add(outputUnit);
         }
       }
     }
@@ -746,12 +815,72 @@ class DeferredLoadTask extends CompilerTask {
         }
       });
     }
-    if (splitProgram && compiler.backend is DartBackend) {
+    Backend backend = compiler.backend;
+    if (splitProgram && backend is JavaScriptBackend) {
+      backend.registerCheckDeferredIsLoaded(compiler.globalDependencies);
+    }
+    if (splitProgram && backend is DartBackend) {
       // TODO(sigurdm): Implement deferred loading for dart2dart.
       splitProgram = false;
       compiler.reportInfo(
           lastDeferred,
           MessageKind.DEFERRED_LIBRARY_DART_2_DART);
     }
+  }
+
+  /// If [send] is a static send with a deferred element, returns the
+  /// [PrefixElement] that the first prefix of the send resolves to.
+  /// Otherwise returns null.
+  ///
+  /// Precondition: send must be static.
+  ///
+  /// Example:
+  ///
+  /// import "a.dart" deferred as a;
+  ///
+  /// main() {
+  ///   print(a.loadLibrary.toString());
+  ///   a.loadLibrary().then((_) {
+  ///     a.run();
+  ///     a.foo.method();
+  ///   });
+  /// }
+  ///
+  /// Returns null for a.loadLibrary() (the special
+  /// function loadLibrary is not deferred). And returns the PrefixElement for
+  /// a.run() and a.foo.
+  /// a.loadLibrary.toString() and a.foo.method() are dynamic sends - and
+  /// this functions should not be called on them.
+  PrefixElement deferredPrefixElement(ast.Send send, TreeElements elements) {
+    Element element = elements[send];
+    // The DeferredLoaderGetter is not deferred, therefore we do not return the
+    // prefix.
+    if (element != null && element.isDeferredLoaderGetter()) return null;
+
+    ast.Node firstNode(ast.Node node) {
+      if (node is! ast.Send) {
+        return node;
+      } else {
+        ast.Send send = node;
+        ast.Node receiver = send.receiver;
+        ast.Node receiverFirst = firstNode(receiver);
+        if (receiverFirst != null) {
+          return receiverFirst;
+        } else {
+          return firstNode(send.selector);
+        }
+      }
+    }
+    ast.Node first = firstNode(send);
+    ast.Node identifier = first.asIdentifier();
+    if (identifier == null) return null;
+    Element maybePrefix = elements[identifier];
+    if (maybePrefix != null && maybePrefix.isPrefix()) {
+      PrefixElement prefixElement = maybePrefix;
+      if (prefixElement.isDeferred) {
+        return prefixElement;
+      }
+    }
+    return null;
   }
 }

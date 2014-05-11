@@ -30,7 +30,8 @@ import 'dart:_js_helper' show allMatchesInStringUnchecked,
                               StringMatch,
                               firstMatchAfter,
                               NoInline;
-import 'dart:_foreign_helper' show JS, JS_EFFECT, JS_INTERCEPTOR_CONSTANT;
+import 'dart:_foreign_helper' show
+    JS, JS_EFFECT, JS_INTERCEPTOR_CONSTANT, JS_STRING_CONCAT;
 import 'dart:math' show Random;
 
 part 'js_array.dart';
@@ -328,7 +329,12 @@ class JSNull extends Interceptor implements Null {
 
   int get hashCode => 0;
 
+  // The spec guarantees that `null` is the singleton instance of the `Null`
+  // class. In the mirrors library we also have to patch the `type` getter to
+  // special case `null`.
   Type get runtimeType => Null;
+
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
 /**

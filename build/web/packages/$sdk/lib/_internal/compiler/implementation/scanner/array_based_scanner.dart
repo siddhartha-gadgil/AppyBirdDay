@@ -16,19 +16,6 @@ abstract class ArrayBasedScanner extends AbstractScanner {
   Link<BeginGroupToken> groupingStack = const Link<BeginGroupToken>();
 
   /**
-   * Appends a token whose kind is determined by [info] and content is defined
-   * by the String [value].
-   *
-   * This method is invoked for class names, field names, method names, types,
-   * etc.
-   */
-  void appendStringToken(PrecedenceInfo info, String value) {
-    tail.next = new StringToken.fromString(info, value, tokenStart,
-                                           canonicalize: true);
-    tail = tail.next;
-  }
-
-  /**
    * Appends a fixed token whose kind and content is determined by [info].
    * Appends an *operator* token from [info].
    *
@@ -72,15 +59,15 @@ abstract class ArrayBasedScanner extends AbstractScanner {
 
   void appendEofToken() {
     beginToken();
-    tail.next = new SymbolToken(EOF_INFO, tokenStart);
-    tail = tail.next;
-    // EOF points to itself so there's always infinite look-ahead.
-    tail.next = tail;
     discardOpenLt();
     while (!groupingStack.isEmpty) {
       unmatchedBeginGroup(groupingStack.head);
       groupingStack = groupingStack.tail;
     }
+    tail.next = new SymbolToken(EOF_INFO, tokenStart);
+    tail = tail.next;
+    // EOF points to itself so there's always infinite look-ahead.
+    tail.next = tail;
   }
 
   /**
@@ -129,30 +116,44 @@ abstract class ArrayBasedScanner extends AbstractScanner {
    */
   int appendEndGroup(PrecedenceInfo info, int openKind) {
     assert(!identical(openKind, LT_TOKEN)); // openKind is < for > and >>
+    discardBeginGroupUntil(openKind);
     appendPrecedenceToken(info);
-    // Don't report unmatched errors for <; it is also the less-than operator.
-    discardOpenLt();
+    Token close = tail;
     if (groupingStack.isEmpty) {
       return advance();
     }
     BeginGroupToken begin = groupingStack.head;
     if (!identical(begin.kind, openKind)) {
-      if (!identical(openKind, OPEN_CURLY_BRACKET_TOKEN) ||
-          !identical(begin.kind, STRING_INTERPOLATION_TOKEN)) {
-        // Not ending string interpolation.
-        unmatchedBeginGroup(begin);
-        return advance();
-      }
+      assert(begin.kind == STRING_INTERPOLATION_TOKEN &&
+             openKind == OPEN_CURLY_BRACKET_TOKEN);
       // We're ending an interpolated expression.
-      begin.endGroup = tail;
+      begin.endGroup = close;
       groupingStack = groupingStack.tail;
       // Using "start-of-text" to signal that we're back in string
       // scanning mode.
       return $STX;
     }
-    begin.endGroup = tail;
+    begin.endGroup = close;
     groupingStack = groupingStack.tail;
     return advance();
+  }
+
+  /**
+   * Discards begin group tokens until a match with [openKind] is found.
+   * This recovers nicely from from a situation like "{[}".
+   */
+  void discardBeginGroupUntil(int openKind) {
+    while (!groupingStack.isEmpty) {
+      // Don't report unmatched errors for <; it is also the less-than operator.
+      discardOpenLt();
+      if (groupingStack.isEmpty) return;
+      BeginGroupToken begin = groupingStack.head;
+      if (openKind == begin.kind) return;
+      if (openKind == OPEN_CURLY_BRACKET_TOKEN &&
+          begin.kind == STRING_INTERPOLATION_TOKEN) return;
+      unmatchedBeginGroup(begin);
+      groupingStack = groupingStack.tail;
+    }
   }
 
   /**
@@ -192,6 +193,11 @@ abstract class ArrayBasedScanner extends AbstractScanner {
   void appendComment(start, bool asciiOnly) {
     if (!includeComments) return;
     appendSubstringToken(COMMENT_INFO, start, asciiOnly);
+  }
+
+  void appendErrorToken(ErrorToken token) {
+    tail.next = token;
+    tail = token;
   }
 
   /**

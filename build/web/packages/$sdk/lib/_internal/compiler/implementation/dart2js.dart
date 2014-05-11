@@ -15,7 +15,7 @@ import 'source_file.dart';
 import 'source_file_provider.dart';
 import 'filenames.dart';
 import 'util/uri_extras.dart';
-import 'util/util.dart';
+import 'util/util.dart' show stackTraceFilePrefix;
 import '../../libraries.dart';
 
 const String LIBRARY_ROOT = '../../../../..';
@@ -261,8 +261,10 @@ Future compile(List<String> argv) {
     new OptionHandler('-[chvm?]+', handleShortOptions),
     new OptionHandler('--throw-on-error',
                       (_) => diagnosticHandler.throwOnError = true),
-    new OptionHandler('--suppress-warnings',
-                      (_) => diagnosticHandler.showWarnings = false),
+    new OptionHandler('--suppress-warnings', (_) {
+      diagnosticHandler.showWarnings = false;
+      passThrough('--suppress-warnings');
+    }),
     new OptionHandler('--suppress-hints',
                       (_) => diagnosticHandler.showHints = false),
     new OptionHandler('--output-type=dart|--output-type=js', setOutputType),
@@ -297,6 +299,7 @@ Future compile(List<String> argv) {
     new OptionHandler('--disallow-unsafe-eval',
                       (_) => hasDisallowUnsafeEval = true),
     new OptionHandler('--show-package-warnings', passThrough),
+    new OptionHandler('--csp', passThrough),
     new OptionHandler('-D.+=.*', addInEnvironment),
 
     // The following two options must come last.
@@ -574,6 +577,10 @@ Supported options:
 
   --show-package-warnings
     Show warnings and hints generated from packages.
+
+  --csp
+    Disables dynamic generation of code in the generated output. This is
+    necessary to satisfy CSP restrictions (see http://www.w3.org/TR/CSP/).
 
 The following options are only used for compiler development and may
 be removed in a future version:

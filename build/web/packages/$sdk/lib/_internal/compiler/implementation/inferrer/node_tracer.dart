@@ -60,11 +60,15 @@ Set<String> doesNotEscapeMapSet = new Set<String>.from(
     'length',
     'clear',
     'containsKey',
-    'containsValue'
+    'containsValue',
+    '[]=',
+    // [keys] only allows key values to escape, which we do not track.
+    'keys'
   ]);
 
-abstract class TracerVisitor implements TypeInformationVisitor {
-  final TypeInformation tracedType;
+abstract class TracerVisitor<T extends TypeInformation>
+    implements TypeInformationVisitor {
+  final T tracedType;
   final TypeGraphInferrerEngine inferrer;
   final Compiler compiler;
 
@@ -145,7 +149,8 @@ abstract class TracerVisitor implements TypeInformationVisitor {
   }
 
   void visitKeyInMapTypeInformation(KeyInMapTypeInformation info) {
-    addNewEscapeInformation(info);
+    // We do not track the use of keys from a map, so we have to bail.
+    bailout('Used as key in Map');
   }
 
   void visitValueInMapTypeInformation(ValueInMapTypeInformation info) {
@@ -213,6 +218,11 @@ abstract class TracerVisitor implements TypeInformationVisitor {
     }
   }
 
+  /**
+   * Checks whether this is a call to a list adding method. The definition
+   * of what list adding means has to stay in sync with
+   * [isParameterOfListAddingMethod].
+   */
   bool isAddedToContainer(DynamicCallSiteTypeInformation info) {
     if (info.arguments == null) return false;
     var receiverType = info.receiver.type;
@@ -224,13 +234,33 @@ abstract class TracerVisitor implements TypeInformationVisitor {
         || (selectorName == 'add' && currentUser == arguments[0]);
   }
 
-  bool isValueAddedToMap(DynamicCallSiteTypeInformation info) {
+  bool isIndexSetOnMap(DynamicCallSiteTypeInformation info) {
     if (info.arguments == null) return false;
     var receiverType = info.receiver.type;
     if (!receiverType.isMap) return false;
     String selectorName = info.selector.name;
     List<TypeInformation> arguments = info.arguments.positional;
-    return selectorName == '[]=' && currentUser == arguments[1];
+    return selectorName == '[]=';
+  }
+
+  /**
+   * Checks whether this is a call to a map adding method for values. The
+   * definition of map adding method has to stay in sync with
+   * [isParameterOfMapAddingMethod].
+   */
+  bool isValueAddedToMap(DynamicCallSiteTypeInformation info) {
+     return isIndexSetOnMap(info) &&
+         currentUser == info.arguments.positional[1];
+  }
+
+  /**
+   * Checks whether this is a call to a map adding method for keys. The
+   * definition of map adding method has to stay in sync with
+   * [isParameterOfMapAddingMethod].
+   */
+  bool isKeyAddedToMap(DynamicCallSiteTypeInformation info) {
+    return isIndexSetOnMap(info) &&
+        currentUser == info.arguments.positional[0];
   }
 
   void visitDynamicCallSiteTypeInformation(
@@ -259,6 +289,9 @@ abstract class TracerVisitor implements TypeInformationVisitor {
         // [ContainerTypeMask] above.
         bailout('Stored in too many maps');
       }
+    } else if (isKeyAddedToMap(info)) {
+      // We do not track the use of keys from a map, so we have to bail.
+      bailout('Used as key in Map');
     }
 
     Iterable<Element> inferredTargetTypes = info.targets.map((element) {
@@ -269,6 +302,11 @@ abstract class TracerVisitor implements TypeInformationVisitor {
     }
   }
 
+  /**
+   * Check whether element is the parameter of a list adding method.
+   * The definition of what a list adding method is has to stay in sync with
+   * [isAddedToContainer].
+   */
   bool isParameterOfListAddingMethod(Element element) {
     if (!element.isParameter()) return false;
     if (element.getEnclosingClass() != compiler.backend.listImplementation) {
@@ -280,8 +318,31 @@ abstract class TracerVisitor implements TypeInformationVisitor {
         || (method.name == 'insert');
   }
 
+  /**
+   * Check whether element is the parameter of a list adding method.
+   * The definition of what a list adding method is has to stay in sync with
+   * [isValueAddedToMap] and [isKeyAddedToMap].
+   */
+  bool isParameterOfMapAddingMethod(Element element) {
+    if (!element.isParameter()) return false;
+    if (element.getEnclosingClass() != compiler.backend.mapImplementation) {
+      return false;
+    }
+    Element method = element.enclosingElement;
+    return (method.name == '[]=');
+  }
+
   bool isClosure(Element element) {
     if (!element.isFunction()) return false;
+    /// Creating an instance of a class that implements [Function] also
+    /// closurizes the corresponding [call] member. We do not currently
+    /// track these, thus the check for [isClosurized] on such a method will
+    /// return false. Instead we catch that case here for now.
+    // TODO(herhut): Handle creation of closures from instances of Function.
+    if (element.isInstanceMember() &&
+        element.name == Compiler.CALL_OPERATOR_NAME) {
+      return true;
+    }
     Element outermost = element.getOutermostEnclosingMemberOrTopLevel();
     return outermost.declaration != element.declaration;
   }
@@ -292,7 +353,7 @@ abstract class TracerVisitor implements TypeInformationVisitor {
         && inferrer.isNativeElement(element.enclosingElement)) {
       bailout('Passed to a native method');
     }
-    if (info.isClosurized()) {
+    if (info.isClosurized) {
       bailout('Returned from a closurized method');
     }
     if (isClosure(info.element)) {
@@ -301,7 +362,12 @@ abstract class TracerVisitor implements TypeInformationVisitor {
     if (compiler.backend.isNeededForReflection(info.element)) {
       bailout('Escape in reflection');
     }
-    if (isParameterOfListAddingMethod(info.element)) {
+    if (!inferrer.compiler.backend
+        .canBeUsedForGlobalOptimizations(info.element)) {
+      bailout('Escape to code that has special backend treatment');
+    }
+    if (isParameterOfListAddingMethod(info.element) ||
+        isParameterOfMapAddingMethod(info.element)) {
       // These elements are being handled in
       // [visitDynamicCallSiteTypeInformation].
       return;

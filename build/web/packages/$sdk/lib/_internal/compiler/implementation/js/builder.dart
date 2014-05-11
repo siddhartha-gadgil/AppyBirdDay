@@ -7,45 +7,280 @@
 
 part of js;
 
+
+/**
+ * Global template manager.  We should aim to have a fixed number of
+ * templates. This implies that we do not use js('xxx') to parse text that is
+ * constructed from values that depend on names in the Dart program.
+ *
+ * TODO(sra): Find the remaining places where js('xxx') used to parse an
+ * unbounded number of expression, or institute a cache policy.
+ */
+TemplateManager templateManager = new TemplateManager();
+
+
+/**
+
+[js] is a singleton instace of JsBuilder.  JsBuilder is a set of conveniences
+for constructing JavaScript ASTs.
+
+[string] and [number] are used to create leaf AST nodes:
+
+    var s = js.string('hello');    //  s = new LiteralString('"hello"')
+    var n = js.number(123);        //  n = new LiteralNumber(123)
+
+In the line above `a --> b` means Dart expression `a` evaluates to a JavaScript
+AST that would pretty-print as `b`.
+
+The [call] method constructs an Expression AST.
+
+No argument
+
+    js('window.alert("hello")')  -->  window.alert("hello")
+
+The input text can contain placeholders `#` that are replaced with provided
+arguments.  A single argument can be passed directly:
+
+    js('window.alert(#)', s)   -->  window.alert("hello")
+
+Multiple arguments are passed as a list:
+
+    js('# + #', [s, s])  -->  "hello" + "hello"
+
+The [statement] method constructs a Statement AST, but is otherwise like the
+[call] method.  This constructs a Return AST:
+
+    var ret = js.statement('return #;', n);  -->  return 123;
+
+A placeholder in a Statement context must be followed by a semicolon ';'.  You
+can think of a statement placeholder as being `#;` to explain why the output
+still has one semicolon:
+
+    js.statement('if (happy) #;', ret)
+    -->
+    if (happy)
+      return 123;
+
+If the placeholder is not followed by a semicolon, it is part of an expression.
+Here the paceholder is in the position of the function in a function call:
+
+    var vFoo = new VariableUse('foo');
+    js.statement('if (happy) #("Happy!")', vFoo)
+    -->
+    if (happy)
+      foo("Happy!");
+
+Generally, a placeholder in an expression position requires an Expression AST as
+an argument and a placeholder in a statement position requires a Statement AST.
+An expression will be converted to a Statement if needed by creating an
+ExpessionStatement.  A String argument will be converted into a VariableUse and
+requires that the string is a JavaScript identifier.
+
+    js('# + 1', vFoo)       -->  foo + 1
+    js('# + 1', 'foo')      -->  foo + 1
+    js('# + 1', 'foo.bar')  -->  assertion failure
+
+Some placeholder positions are _splicing contexts_.  A function argument list is
+a splicing expression context.  A placeholder in a splicing expression context
+can take a single Expression (or String, converted to VariableUse) or an
+Iterable of Expressions (and/or Strings).
+
+    // non-splicing argument:
+    js('#(#)', ['say', s])        -->  say("hello")
+    // splicing arguments:
+    js('#(#)', ['say', []])       -->  say()
+    js('#(#)', ['say', [s]])      -->  say("hello")
+    js('#(#)', ['say', [s, n]])   -->  say("hello", 123)
+
+A splicing context can be used to append 'lists' and add extra elements:
+
+    js('foo(#, #, 1)', [ ['a', n], s])       -->  foo(a, 123, "hello", 1)
+    js('foo(#, #, 1)', [ ['a', n], [s, n]])  -->  foo(a, 123, "hello", 123, 1)
+    js('foo(#, #, 1)', [ [], [s, n]])        -->  foo("hello", 123, 1)
+    js('foo(#, #, 1)', [ [], [] ])           -->  foo(1)
+
+The generation of a compile-time optional argument expression can be chosen by
+providing an empty or singleton list.
+
+In addition to Expressions and Statements, there are Parameters, which occur
+only in the parameter list of a function expression or declaration.
+Placeholders in parameter positions behave like placeholders in Expression
+positions, except only Parameter AST nodes are permitted.  String arguments for
+parameter placeholders are converted to Parameter AST nodes.
+
+    var pFoo = new Parameter('foo')
+    js('function(#) { return #; }', [pFoo, vFoo])
+    -->
+    function(foo) { return foo; }
+
+Expressions and Parameters are not compatible with each other's context:
+
+    js('function(#) { return #; }', [vFoo, vFoo]) --> error
+    js('function(#) { return #; }', [pFoo, pFoo]) --> error
+
+The parameter context is a splicing context.  When combined with the
+context-sensitive conversion of Strings, this simplifies the construction of
+trampoline-like functions:
+
+    var args = ['a', 'b'];
+    js('function(#) { return f(this, #); }', [args, args])
+    -->
+    function(a, b) { return f(this, a, b); }
+
+A statement placeholder in a Block is also in a splicing context.  In addition
+to splicing Iterables, statement placeholders in a Block will also splice a
+Block or an EmptyStatement.  This flattens nested blocks and allows blocks to be
+appended.
+
+    var b1 = js.statement('{ 1; 2; }');
+    var sEmpty = new Emptystatement();
+    js.statement('{ #; #; #; #; }', [sEmpty, b1, b1, sEmpty])
+    -->
+    { 1; 2; 1; 2; }
+
+A placeholder in the context of an if-statement condition also accepts a Dart
+bool argument, which selects the then-part or else-part of the if-statement:
+
+    js.statement('if (#) return;', vFoo)   -->  if (foo) return;
+    js.statement('if (#) return;', true)   -->  return;
+    js.statement('if (#) return;', false)  -->  ;   // empty statement
+    var eTrue = new LiteralBool(true);
+    js.statement('if (#) return;', eTrue)  -->  if (true) return;
+
+Combined with block splicing, if-statement condition context placeholders allows
+the creation of tenplates that select code depending on variables.
+
+    js.statement('{ 1; if (#) 2; else { 3; 4; } 5;}', true)
+    --> { 1; 2; 5; }
+
+    js.statement('{ 1; if (#) 2; else { 3; 4; } 5;}', false)
+    --> { 1; 3; 4; 5; }
+
+A placeholder following a period in a property access is in a property access
+context.  This is just like an expression context, except String arguments are
+converted to JavaScript property accesses.  In JavaScript, `a.b` is short-hand
+for `a["b"]`:
+
+    js('a[#]', vFoo)  -->  a[foo]
+    js('a[#]', s)     -->  a.hello    (i.e. a["hello"]).
+    js('a[#]', 'x')   -->  a[x]
+
+    js('a.#', vFoo)   -->  a[foo]
+    js('a.#', s)      -->  a.hello    (i.e. a["hello"])
+    js('a.#', 'x')    -->  a.x        (i.e. a["x"])
+
+(Question - should `.#` be restricted to permit only String arguments? The
+template should probably be writted with `[]` if non-strings are accepted.)
+
+
+Object initialiers allow placeholders in the key property name position:
+
+    js('{#:1, #:2}',  [s, 'bye'])    -->  {hello: 1, bye: 2}
+
+
+What is not implemented:
+
+ -  Array initializers and object initializers could support splicing.  In the
+    array case, we would need some way to know if an ArrayInitializer argument
+    should be splice or is intended as a single value.
+
+ -  There are no placeholders in definition contexts:
+
+        function #(){}
+        var # = 1;
+
+*/
+const JsBuilder js = const JsBuilder();
+
+
 class JsBuilder {
   const JsBuilder();
 
-  // Parse a bit of JavaScript, and return an expression.
-  // See the MiniJsParser class.
-  // You can provide an expression or a list of expressions, which will be
-  // interpolated into the source at the '#' signs.
-  Expression call(String source, [var expression]) {
-    var result = new MiniJsParser(source).expression();
-    if (expression == null) return result;
+  /**
+   * Parses a bit of JavaScript, and returns an expression.
+   *
+   * See the MiniJsParser class.
+   *
+   * [arguments] can be a single [Node] (e.g. an [Expression] or [Statement]) or
+   * a list of [Node]s, which will be interpolated into the source at the '#'
+   * signs.
+   */
+  Expression call(String source, [var arguments]) {
+    Template template = _findExpressionTemplate(source);
+    if (arguments == null) return template.instantiate([]);
+    return template.instantiate(arguments is List ? arguments : [arguments]);
+  }
 
-    List<Expression> expressions;
-    if (expression is List) {
-      expressions = expression;
+  /**
+   * Parses a JavaScript Statement, otherwise just like [call].
+   */
+  Statement statement(String source, [var arguments]) {
+    Template template = _findStatementTemplate(source);
+    if (arguments == null) return template.instantiate([]);
+    return template.instantiate(arguments is List ? arguments : [arguments]);
+  }
+
+  /**
+   * Parses JavaScript written in the `JS` foreign instruction.
+   *
+   * The [source] must be a JavaScript expression or a JavaScript throw
+   * statement.
+   */
+  Template parseForeignJS(String source) {
+    // TODO(sra): Parse with extra validation to forbid `#` interpolation in
+    // functions, as this leads to unanticipated capture of temporaries that are
+    // reused after capture.
+    if (source.startsWith("throw ")) {
+      return _findStatementTemplate(source);
     } else {
-      expressions = <Expression>[expression];
+      return _findExpressionTemplate(source);
     }
-    if (expressions.length != result.interpolatedExpressions.length) {
-      throw "Unmatched number of interpolated expressions";
-    }
-    for (int i = 0; i < expressions.length; i++) {
-      result.interpolatedExpressions[i].value = expressions[i];
-    }
-
-    return result.value;
   }
 
-  // Parse JavaScript written in the JS foreign instruction.
-  Expression parseForeignJS(String source, [var expression]) {
-    // We can parse simple JS with the mini parser.  At the moment we can't
-    // handle JSON literals and function literals, both of which contain "{".
-    if (source.contains("{") || source.startsWith("throw ")) {
-      assert(expression == null);
-      return new LiteralExpression(source);
+  Template _findExpressionTemplate(String source) {
+    Template template = templateManager.lookupExpressionTemplate(source);
+    if (template == null) {
+      MiniJsParser parser = new MiniJsParser(source);
+      Expression expression = parser.expression();
+      template = templateManager.defineExpressionTemplate(source, expression);
     }
-    return call(source, expression);
+    return template;
   }
 
-  /// Creates a litteral js string from [value].
+  Template _findStatementTemplate(String source) {
+    Template template = templateManager.lookupStatementTemplate(source);
+    if (template == null) {
+      MiniJsParser parser = new MiniJsParser(source);
+      Statement statement = parser.statement();
+      template = templateManager.defineStatementTemplate(source, statement);
+    }
+    return template;
+  }
+
+  /**
+   * Creates an Expression template without caching the result.
+   */
+  Template uncachedExpressionTemplate(String source) {
+    MiniJsParser parser = new MiniJsParser(source);
+    Expression expression = parser.expression();
+    return new Template(
+        source, expression, isExpression: true, forceCopy: false);
+  }
+
+  /**
+   * Create an Expression template which has [ast] as the result.  This is used
+   * to wrap a generated AST in a zero-argument Template so it can be passed to
+   * context that expects a template.
+   */
+  Template expressionTemplateYielding(Node ast) {
+    return new Template.withExpressionResult(ast);
+  }
+
+  Template statementTemplateYielding(Node ast) {
+    return new Template.withStatementResult(ast);
+  }
+
+  /// Creates a literal js string from [value].
   LiteralString escapedString(String value) {
     // Do not escape unicode characters and ' because they are allowed in the
     // string literal anyway.
@@ -69,7 +304,7 @@ class JsBuilder {
     return result;
   }
 
-  /// Creates a litteral js string from [value].
+  /// Creates a literal js string from [value].
   ///
   /// Note that this function only puts quotes around [value]. It does not do
   /// any escaping, so use only when you can guarantee that [value] does not
@@ -79,132 +314,35 @@ class JsBuilder {
 
   LiteralNumber number(num value) => new LiteralNumber('$value');
 
-  If if_(condition, thenPart, [elsePart]) {
-    condition = toExpression(condition);
-    return (elsePart == null)
-        ? new If.noElse(condition, toStatement(thenPart))
-        : new If(condition, toStatement(thenPart), toStatement(elsePart));
-  }
-
-  Return return_([value]) {
-    return new Return(value == null ? null : toExpression(value));
-  }
-
-  Block block(statement) {
-    if (statement is Block) {
-      return statement;
-    } else if (statement is List) {
-      List<Statement> statements = statement
-          .map(toStatement)
-          .where((s) => s is !EmptyStatement)
-          .toList();
-      return new Block(statements);
-    } else {
-      return new Block(<Statement>[toStatement(statement)]);
-    }
-  }
-
-  Fun fun(parameters, body) {
-    Parameter toParameter(parameter) {
-      if (parameter is String) {
-        return new Parameter(parameter);
-      } else if (parameter is Parameter) {
-        return parameter;
-      } else {
-        throw new ArgumentError('parameter should be a String or a Parameter');
-      }
-    }
-    if (parameters is! List) {
-      parameters = [parameters];
-    }
-    return new Fun(parameters.map(toParameter).toList(), block(body));
-  }
-
-  VariableDeclarationList defineVar(String name, [initializer]) {
-    if (initializer != null) {
-      initializer = toExpression(initializer);
-    }
-    var declaration = new VariableDeclaration(name);
-    var initialization = [new VariableInitialization(declaration, initializer)];
-    return new VariableDeclarationList(initialization);
-  }
-
-  Statement toStatement(statement) {
-    if (statement is List) {
-      return block(statement);
-    } else if (statement is Node) {
-      return statement.toStatement();
-    } else {
-      throw new ArgumentError('statement');
-    }
-  }
-
-  Expression toExpression(expression) {
-    if (expression == null) {
-      return null;
-    } else if (expression is Expression) {
-      return expression;
-    } else if (expression is String) {
-      return this(expression);
-    } else if (expression is num) {
-      return new LiteralNumber('$expression');
-    } else if (expression is bool) {
-      return new LiteralBool(expression);
-    } else if (expression is Map) {
-      if (!expression.isEmpty) {
-        throw new ArgumentError('expression should be an empty Map');
-      }
-      return new ObjectInitializer([]);
-    } else if (expression is List) {
-      var values = new List<ArrayElement>.generate(expression.length,
-          (index) => new ArrayElement(index, toExpression(expression[index])));
-      return new ArrayInitializer(values.length, values);
-    } else {
-      throw new ArgumentError('expression should be an Expression, '
-                              'a String, a num, a bool, a Map, or a List;');
-    }
-  }
-
-  ForIn forIn(String name, object, statement) {
-    return new ForIn(defineVar(name),
-                     toExpression(object),
-                     toStatement(statement));
-  }
-
-  For for_(init, condition, update, statement) {
-    return new For(
-        toExpression(init), toExpression(condition), toExpression(update),
-        toStatement(statement));
-  }
-
-  While while_(condition, statement) {
-    return new While(
-        toExpression(condition), toStatement(statement));
-  }
-
-  Try try_(body, {catchPart, finallyPart}) {
-    if (catchPart != null) catchPart = toStatement(catchPart);
-    if (finallyPart != null) finallyPart = toStatement(finallyPart);
-    return new Try(toStatement(body), catchPart, finallyPart);
-  }
-
   Comment comment(String text) => new Comment(text);
 }
-
-const JsBuilder js = const JsBuilder();
 
 LiteralString string(String value) => js.string(value);
 
 class MiniJsParserError {
   MiniJsParserError(this.parser, this.message) { }
 
-  MiniJsParser parser;
-  String message;
+  final MiniJsParser parser;
+  final String message;
 
   String toString() {
-    var codes = new List.filled(parser.lastPosition, charCodes.$SPACE);
-    var spaces = new String.fromCharCodes(codes);
-    return "Error in MiniJsParser:\n${parser.src}\n$spaces^\n$spaces$message\n";
+    int pos = parser.lastPosition;
+
+    // Discard lines following the line containing lastPosition.
+    String src = parser.src;
+    int newlinePos = src.indexOf('\n', pos);
+    if (newlinePos >= pos) src = src.substring(0, newlinePos);
+
+    // Extract the prefix of the error line before lastPosition.
+    String line = src;
+    int lastLineStart = line.lastIndexOf('\n');
+    if (lastLineStart >= 0) line = line.substring(lastLineStart + 1);
+    String prefix = line.substring(0, pos - (src.length - line.length));
+
+    // Replace non-tabs with spaces, giving a print indent that matches the text
+    // for tabbing.
+    String spaces = prefix.replaceAll(new RegExp(r'[^\t]'), ' ');
+    return 'Error in MiniJsParser:\n${src}\n$spaces^\n$spaces$message\n';
   }
 }
 
@@ -219,10 +357,9 @@ class MiniJsParserError {
 /// * brackets.
 /// * var declarations.
 /// * operator precedence.
+/// * anonymous funtions and named function expressions and declarations.
 /// Notable things it can't do yet include:
-/// * non-empty object literals.
-/// * throw, return.
-/// * statements, including any flow control (if, while, for, etc.)
+/// * some statements are still missing (do-while, while, switch).
 ///
 /// It's a fairly standard recursive descent parser.
 ///
@@ -241,13 +378,13 @@ class MiniJsParser {
     getToken();
   }
 
-  int lastCategory;
-  String lastToken;
-  int lastPosition;
-  int position;
-  String src;
-  final List<InterpolatedExpression> interpolatedValues =
-      <InterpolatedExpression>[];
+  int lastCategory = NONE;
+  String lastToken = null;
+  int lastPosition = 0;
+  int position = 0;
+  bool skippedNewline = false;  // skipped newline in last getToken?
+  final String src;
+  final List<InterpolatedNode> interpolatedValues = <InterpolatedNode>[];
 
   static const NONE = -1;
   static const ALPHA = 0;
@@ -265,9 +402,10 @@ class MiniJsParser {
   static const COMMA = 12;
   static const QUERY = 13;
   static const COLON = 14;
-  static const HASH = 15;
-  static const WHITESPACE = 16;
-  static const OTHER = 17;
+  static const SEMICOLON = 15;
+  static const HASH = 16;
+  static const WHITESPACE = 17;
+  static const OTHER = 18;
 
   // Make sure that ]] is two symbols.
   bool singleCharCategory(int category) => category >= DOT;
@@ -290,6 +428,7 @@ class MiniJsParser {
       case COMMA: return "COMMA";
       case QUERY: return "QUERY";
       case COLON: return "COLON";
+      case SEMICOLON: return "SEMICOLON";
       case HASH: return "HASH";
       case WHITESPACE: return "WHITESPACE";
       case OTHER: return "OTHER";
@@ -307,7 +446,7 @@ class MiniJsParser {
       LPAREN, RPAREN, SYMBOL, SYMBOL, COMMA, SYMBOL, DOT, SYMBOL,   // ()*+,-./
       NUMERIC, NUMERIC, NUMERIC, NUMERIC, NUMERIC,                  // 01234
       NUMERIC, NUMERIC, NUMERIC, NUMERIC, NUMERIC,                  // 56789
-      COLON, OTHER, SYMBOL, SYMBOL, SYMBOL, QUERY, OTHER,           // :;<=>?@
+      COLON, SEMICOLON, SYMBOL, SYMBOL, SYMBOL, QUERY, OTHER,       // :;<=>?@
       ALPHA, ALPHA, ALPHA, ALPHA, ALPHA, ALPHA, ALPHA, ALPHA,       // ABCDEFGH
       ALPHA, ALPHA, ALPHA, ALPHA, ALPHA, ALPHA, ALPHA, ALPHA,       // IJKLMNOP
       ALPHA, ALPHA, ALPHA, ALPHA, ALPHA, ALPHA, ALPHA, ALPHA,       // QRSTUVWX
@@ -355,6 +494,7 @@ class MiniJsParser {
       position++;
       if (position >= src.length) error("Unterminated literal");
       currentCode = src.codeUnitAt(position);
+      if (currentCode == charCodes.$LF) error("Unterminated literal");
       if (currentCode == charCodes.$BACKSLASH) {
         if (++position >= src.length) error("Unterminated literal");
         int escaped = src.codeUnitAt(position);
@@ -370,10 +510,30 @@ class MiniJsParser {
   }
 
   void getToken() {
-    while (position < src.length &&
-           category(src.codeUnitAt(position)) == WHITESPACE) {
-      position++;
+    skippedNewline = false;
+    for (;;) {
+      if (position >= src.length) break;
+      int code = src.codeUnitAt(position);
+      //  Skip '//' and '/*' style comments.
+      if (code == charCodes.$SLASH &&
+          position + 1 < src.length) {
+        if (src.codeUnitAt(position + 1) == charCodes.$SLASH) {
+          int nextPosition = src.indexOf('\n', position);
+          if (nextPosition == -1) nextPosition = src.length;
+          position = nextPosition;
+          continue;
+        } else if (src.codeUnitAt(position + 1) == charCodes.$STAR) {
+          int nextPosition = src.indexOf('*/', position + 2);
+          if (nextPosition == -1) error('Unterminated comment');
+          position = nextPosition + 2;
+          continue;
+        }
+      }
+      if (category(code) != WHITESPACE) break;
+      if (code == charCodes.$LF) skippedNewline = true;
+      ++position;
     }
+
     if (position == src.length) {
       lastCategory = NONE;
       lastToken = null;
@@ -458,6 +618,22 @@ class MiniJsParser {
     return false;
   }
 
+  void expectSemicolon() {
+    if (acceptSemicolon()) return;
+    error('Expected SEMICOLON');
+  }
+
+  bool acceptSemicolon() {
+    // Accept semicolon or automatically inserted semicolon before close brace.
+    // Miniparser forbids other kinds of semicolon insertion.
+    if (RBRACE == lastCategory) return true;
+    if (NONE == lastCategory) return true;  // end of input
+    if (skippedNewline) {
+      error('No automatic semicolon insertion at preceding newline');
+    }
+    return acceptCategory(SEMICOLON);
+  }
+
   bool acceptString(String string) {
     if (lastToken == string) {
       getToken();
@@ -479,6 +655,8 @@ class MiniJsParser {
         return new LiteralBool(false);
       } else if (last == "null") {
         return new LiteralNull();
+      } else if (last == "function") {
+        return parseFunctionExpression();
       } else {
         return new VariableUse(last);
       }
@@ -491,18 +669,17 @@ class MiniJsParser {
     } else if (acceptCategory(NUMERIC)) {
       return new LiteralNumber(last);
     } else if (acceptCategory(LBRACE)) {
-      expectCategory(RBRACE);
-      return new ObjectInitializer([]);
+      return parseObjectInitializer();
     } else if (acceptCategory(LSQUARE)) {
       var values = <ArrayElement>[];
       if (!acceptCategory(RSQUARE)) {
         do {
-          values.add(new ArrayElement(values.length, parseExpression()));
+          values.add(new ArrayElement(values.length, parseAssignment()));
         } while (acceptCategory(COMMA));
         expectCategory(RSQUARE);
       }
       return new ArrayInitializer(values.length, values);
-    } else if (last.startsWith("/")) {
+    } else if (last != null && last.startsWith("/")) {
       String regexp = getDelimited(lastPosition);
       getToken();
       String flags = lastToken;
@@ -510,13 +687,81 @@ class MiniJsParser {
       Expression expression = new RegExpLiteral(regexp + flags);
       return expression;
     } else if (acceptCategory(HASH)) {
-      InterpolatedExpression expression = new InterpolatedExpression(null);
+      InterpolatedExpression expression =
+          new InterpolatedExpression(interpolatedValues.length);
       interpolatedValues.add(expression);
       return expression;
     } else {
       error("Expected primary expression");
       return null;
     }
+  }
+
+  Expression parseFunctionExpression() {
+    String last = lastToken;
+    if (acceptCategory(ALPHA)) {
+      String functionName = last;
+      return new NamedFunction(new VariableDeclaration(functionName),
+          parseFun());
+    }
+    return parseFun();
+  }
+
+  Expression parseFun() {
+    List<Parameter> params = <Parameter>[];
+
+    expectCategory(LPAREN);
+    if (!acceptCategory(RPAREN)) {
+      for (;;) {
+        if (acceptCategory(HASH)) {
+          InterpolatedParameter parameter =
+              new InterpolatedParameter(interpolatedValues.length);
+          interpolatedValues.add(parameter);
+          params.add(parameter);
+        } else {
+          String argumentName = lastToken;
+          expectCategory(ALPHA);
+          params.add(new Parameter(argumentName));
+        }
+        if (acceptCategory(COMMA)) continue;
+        expectCategory(RPAREN);
+        break;
+      }
+    }
+
+    expectCategory(LBRACE);
+    Block block = parseBlock();
+    return new Fun(params, block);
+  }
+
+  Expression parseObjectInitializer() {
+    List<Property> properties = <Property>[];
+    for (;;) {
+      if (acceptCategory(RBRACE)) break;
+      // Limited subset: keys are identifiers, no 'get' or 'set' properties.
+      Literal propertyName;
+      String identifier = lastToken;
+      if (acceptCategory(ALPHA)) {
+        propertyName = new LiteralString('"$identifier"');
+      } else if (acceptCategory(STRING)) {
+        propertyName = new LiteralString(identifier);
+      } else if (acceptCategory(SYMBOL)) {  // e.g. void
+        propertyName = new LiteralString('"$identifier"');
+      } else if (acceptCategory(HASH)) {
+        InterpolatedLiteral interpolatedLiteral =
+            new InterpolatedLiteral(interpolatedValues.length);
+        interpolatedValues.add(interpolatedLiteral);
+        propertyName = interpolatedLiteral;
+      } else {
+        error('Expected property name');
+      }
+      expectCategory(COLON);
+      Expression value = parseAssignment();
+      properties.add(new Property(propertyName, value));
+      if (acceptCategory(RBRACE)) break;
+      expectCategory(COMMA);
+    }
+    return new ObjectInitializer(properties);
   }
 
   Expression parseMember() {
@@ -543,7 +788,7 @@ class MiniJsParser {
         final arguments = <Expression>[];
         if (!acceptCategory(RPAREN)) {
           while (true) {
-            Expression argument = parseExpression();
+            Expression argument = parseAssignment();
             arguments.add(argument);
             if (acceptCategory(RPAREN)) break;
             expectCategory(COMMA);
@@ -569,6 +814,12 @@ class MiniJsParser {
   }
 
   Expression getDotRhs(Expression receiver) {
+    if (acceptCategory(HASH)) {
+      InterpolatedSelector property =
+          new InterpolatedSelector(interpolatedValues.length);
+      interpolatedValues.add(property);
+      return new PropertyAccess(receiver, property);
+    }
     String identifier = lastToken;
     // In ES5 keywords like delete and continue are allowed as property
     // names, and the IndexedDB API uses that, so we need to allow it here.
@@ -585,9 +836,16 @@ class MiniJsParser {
   Expression parsePostfix() {
     Expression expression = parseCall();
     String operator = lastToken;
-    if (lastCategory == SYMBOL && (acceptString("++") || acceptString("--"))) {
+    // JavaScript grammar is:
+    //     LeftHandSideExpression [no LineTerminator here] ++
+    if (lastCategory == SYMBOL &&
+        !skippedNewline &&
+        (acceptString("++") || acceptString("--"))) {
       return new Postfix(operator, expression);
     }
+    // If we don't accept '++' or '--' due to skippedNewline a newline, no other
+    // part of the parser will accept the token and we will get an error at the
+    // whole expression level.
     return expression;
   }
 
@@ -664,23 +922,45 @@ class MiniJsParser {
     return lhs;
   }
 
-  Expression parseExpression() => parseAssignment();
+  Expression parseExpression() {
+    Expression expression = parseAssignment();
+    while (acceptCategory(COMMA)) {
+      Expression right = parseAssignment();
+      expression = new Binary(',', expression, right);
+    }
+    return expression;
+  }
+
+  VariableDeclarationList parseVariableDeclarationList() {
+    String firstVariable = lastToken;
+    expectCategory(ALPHA);
+    return finishVariableDeclarationList(firstVariable);
+  }
+
+  VariableDeclarationList finishVariableDeclarationList(String firstVariable) {
+    var initialization = [];
+
+    void declare(String variable) {
+      Expression initializer = null;
+      if (acceptString("=")) {
+        initializer = parseAssignment();
+      }
+      var declaration = new VariableDeclaration(variable);
+      initialization.add(new VariableInitialization(declaration, initializer));
+    }
+
+    declare(firstVariable);
+    while (acceptCategory(COMMA)) {
+      String variable = lastToken;
+      expectCategory(ALPHA);
+      declare(variable);
+    }
+    return new VariableDeclarationList(initialization);
+  }
 
   Expression parseVarDeclarationOrExpression() {
     if (acceptString("var")) {
-      var initialization = [];
-      do {
-        String variable = lastToken;
-        expectCategory(ALPHA);
-        Expression initializer = null;
-        if (acceptString("=")) {
-          initializer = parseExpression();
-        }
-        var declaration = new VariableDeclaration(variable);
-        initialization.add(
-            new VariableInitialization(declaration, initializer));
-      } while (acceptCategory(COMMA));
-      return new VariableDeclarationList(initialization);
+      return parseVariableDeclarationList();
     } else {
       return parseExpression();
     }
@@ -691,142 +971,211 @@ class MiniJsParser {
     if (lastCategory != NONE || position != src.length) {
       error("Unparsed junk: ${categoryToString(lastCategory)}");
     }
-    if (!interpolatedValues.isEmpty) {
-      return new JSExpression(expression, interpolatedValues);
-    }
     return expression;
   }
-}
 
-/**
- * Clone a JSExpression node into an expression where all children
- * have been cloned, and [InterpolatedExpression]s have been replaced
- * with real [Expression].
- */
-class UninterpolateJSExpression extends BaseVisitor<Node> {
-  final List<Expression> arguments;
-  int argumentIndex = 0;
-
-  UninterpolateJSExpression(this.arguments);
-
-  void error(message) {
-    throw message;
-  }
-
-  Node visitNode(Node node) {
-    error('Cannot handle $node');
-    return null;
-  }
-
-  Node copyPosition(Node oldNode, Node newNode) {
-    newNode.sourcePosition = oldNode.sourcePosition;
-    newNode.endSourcePosition = oldNode.endSourcePosition;
-    return newNode;
-  }
-
-  Node visit(Node node) {
-    return node == null ? null : node.accept(this);
-  }
-
-  List<Node> visitList(List<Node> list) {
-    return list.map((e) => visit(e)).toList();
-  }
-
-  Node visitLiteralString(LiteralString node) {
-    return node;
-  }
-
-  Node visitVariableUse(VariableUse node) {
-    return node;
-  }
-
-  Node visitAccess(PropertyAccess node) {
-    return copyPosition(node,
-        new PropertyAccess(visit(node.receiver), visit(node.selector)));
-  }
-
-  Node visitCall(Call node) {
-    return copyPosition(node,
-        new Call(visit(node.target), visitList(node.arguments)));
-  }
-
-  Node visitInterpolatedExpression(InterpolatedExpression expression) {
-    return arguments[argumentIndex++];
-  }
-
-  Node visitJSExpression(JSExpression expression) {
-    assert(argumentIndex == 0);
-    Node result = visit(expression.value);
-    if (argumentIndex != arguments.length) {
-      error("Invalid number of arguments");
+  Statement statement() {
+    Statement statement = parseStatement();
+    if (lastCategory != NONE || position != src.length) {
+      error("Unparsed junk: ${categoryToString(lastCategory)}");
     }
-    assert(result is! JSExpression);
-    return result;
+    // TODO(sra): interpolated capture here?
+    return statement;
   }
 
-  Node visitLiteralExpression(LiteralExpression node) {
-    assert(argumentIndex == 0);
-    return copyPosition(node,
-        new LiteralExpression.withData(node.template, arguments));
+  Block parseBlock() {
+    List<Statement> statements = <Statement>[];
+
+    while (!acceptCategory(RBRACE)) {
+      Statement statement = parseStatement();
+      statements.add(statement);
+    }
+    return new Block(statements);
   }
 
-  Node visitAssignment(Assignment node) {
-    return copyPosition(node,
-        new Assignment._internal(visit(node.leftHandSide),
-                                 visit(node.compoundTarget),
-                                 visit(node.value)));
+  Statement parseStatement() {
+    if (acceptCategory(LBRACE)) return parseBlock();
+
+    if (acceptCategory(SEMICOLON)) return new EmptyStatement();
+
+    if (lastCategory == ALPHA) {
+      if (acceptString('return')) return parseReturn();
+
+      if (acceptString('throw')) return parseThrow();
+
+      if (acceptString('break')) {
+        return parseBreakOrContinue((label) => new Break(label));
+      }
+
+      if (acceptString('continue')) {
+        return parseBreakOrContinue((label) => new Continue(label));
+      }
+
+      if (acceptString('if')) return parseIfThenElse();
+
+      if (acceptString('for')) return parseFor();
+
+      if (acceptString('function')) return parseFunctionDeclaration();
+
+      if (acceptString('try')) return parseTry();
+
+      if (acceptString('var')) {
+        Expression declarations = parseVariableDeclarationList();
+        expectSemicolon();
+        return new ExpressionStatement(declarations);
+      }
+
+      if (lastToken == 'case' ||
+          lastToken == 'do' ||
+          lastToken == 'while' ||
+          lastToken == 'switch' ||
+          lastToken == 'with') {
+        error('Not implemented in mini parser');
+      }
+    }
+
+
+    // TODO:  label: statement
+
+    bool checkForInterpolatedStatement = lastCategory == HASH;
+
+    Expression expression = parseExpression();
+    expectSemicolon();
+
+    if (checkForInterpolatedStatement) {
+      // 'Promote' the interpolated expression `#;` to an interpolated
+      // statement.
+      if (expression is InterpolatedExpression) {
+        assert(identical(interpolatedValues.last, expression));
+        InterpolatedStatement statement =
+            new InterpolatedStatement(expression.name);
+        interpolatedValues[interpolatedValues.length - 1] = statement;
+        return statement;
+      }
+    }
+
+    return new ExpressionStatement(expression);
   }
 
-  Node visitRegExpLiteral(RegExpLiteral node) {
-    return node;
+  Statement parseReturn() {
+    if (acceptSemicolon()) return new Return();
+    Expression expression = parseExpression();
+    expectSemicolon();
+    return new Return(expression);
   }
 
-  Node visitLiteralNumber(LiteralNumber node) {
-    return node;
+  Statement parseThrow() {
+    if (skippedNewline) error('throw expression must be on same line');
+    Expression expression = parseExpression();
+    expectSemicolon();
+    return new Throw(expression);
   }
 
-  Node visitBinary(Binary node) {
-    return copyPosition(node,
-        new Binary(node.op, visit(node.left), visit(node.right)));
+  Statement parseBreakOrContinue(constructor) {
+    var identifier = lastToken;
+    if (!skippedNewline && acceptCategory(ALPHA)) {
+      expectSemicolon();
+      return constructor(identifier);
+    }
+    expectSemicolon();
+    return constructor(null);
   }
 
-  Node visitPrefix(Prefix node) {
-    return copyPosition(node,
-        new Prefix(node.op, visit(node.argument)));
+  Statement parseIfThenElse() {
+    expectCategory(LPAREN);
+    Expression condition = parseExpression();
+    expectCategory(RPAREN);
+    Statement thenStatement = parseStatement();
+    if (acceptString('else')) {
+      // Resolves dangling else by binding 'else' to closest 'if'.
+      Statement elseStatement = parseStatement();
+      return new If(condition, thenStatement, elseStatement);
+    } else {
+      return new If.noElse(condition, thenStatement);
+    }
   }
 
-  Node visitPostfix(Postfix node) {
-    return copyPosition(node,
-        new Postfix(node.op, visit(node.argument)));
+  Statement parseFor() {
+    // For-init-condition-increment style loops are fully supported.
+    //
+    // Only one for-in variant is currently implemented:
+    //
+    //     for (var variable in Expression) Statement
+    //
+    Statement finishFor(Expression init) {
+      Expression condition = null;
+      if (!acceptCategory(SEMICOLON)) {
+        condition = parseExpression();
+        expectCategory(SEMICOLON);
+      }
+      Expression update = null;
+      if (!acceptCategory(RPAREN)) {
+        update = parseExpression();
+        expectCategory(RPAREN);
+      }
+      Statement body = parseStatement();
+      return new For(init, condition, update, body);
+    }
+
+    expectCategory(LPAREN);
+    if (acceptCategory(SEMICOLON)) {
+      return finishFor(null);
+    }
+
+    if (acceptString('var')) {
+      String identifier = lastToken;
+      expectCategory(ALPHA);
+      if (acceptString('in')) {
+        Expression objectExpression = parseExpression();
+        expectCategory(RPAREN);
+        Statement body = parseStatement();
+        return new ForIn(
+            new VariableDeclarationList([
+                new VariableInitialization(
+                    new VariableDeclaration(identifier), null)]),
+            objectExpression,
+            body);
+      }
+      Expression declarations = finishVariableDeclarationList(identifier);
+      expectCategory(SEMICOLON);
+      return finishFor(declarations);
+    }
+
+    Expression init = parseExpression();
+    expectCategory(SEMICOLON);
+    return finishFor(init);
   }
 
-  Node visitNew(New node) {
-    return copyPosition(node,
-        new New(visit(node.target), visitList(node.arguments)));
+  Statement parseFunctionDeclaration() {
+    String name = lastToken;
+    expectCategory(ALPHA);
+    Expression fun = parseFun();
+    return new FunctionDeclaration(new VariableDeclaration(name), fun);
   }
 
-  Node visitArrayInitializer(ArrayInitializer node) {
-    return copyPosition(node,
-        new ArrayInitializer(node.length, visitList(node.elements)));
+  Statement parseTry() {
+    expectCategory(LBRACE);
+    Block body = parseBlock();
+    String token = lastToken;
+    Catch catchPart = null;
+    if (acceptString('catch')) catchPart = parseCatch();
+    Block finallyPart = null;
+    if (acceptString('finally')) {
+      expectCategory(LBRACE);
+      finallyPart = parseBlock();
+    } else {
+      if (catchPart == null) error("expected 'finally'");
+    }
+    return new Try(body, catchPart, finallyPart);
   }
 
-  Node visitArrayElement(ArrayElement node) {
-    return copyPosition(node,
-        new ArrayElement(node.index, visit(node.value)));
-  }
-
-  Node visitConditional(Conditional node) {
-    return copyPosition(node,
-        new Conditional(visit(node.condition),
-                        visit(node.then),
-                        visit(node.otherwise)));
-  }
-
-  Node visitLiteralNull(LiteralNull node) {
-    return node;
-  }
-
-  Node visitLiteralBool(LiteralBool node) {
-    return node;
+  Catch parseCatch() {
+    expectCategory(LPAREN);
+    String identifier = lastToken;
+    expectCategory(ALPHA);
+    expectCategory(RPAREN);
+    expectCategory(LBRACE);
+    Block body = parseBlock();
+    return new Catch(new VariableDeclaration(identifier), body);
   }
 }

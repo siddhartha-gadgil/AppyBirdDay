@@ -45,6 +45,16 @@ class DartBackend extends Backend {
   Map<Element, TreeElements> get resolvedElements =>
       compiler.enqueuer.resolution.resolvedElements;
 
+  ConstantSystem get constantSystem {
+    return constantCompilerTask.constantCompiler.constantSystem;
+  }
+
+  BackendConstantEnvironment get constants => constantCompilerTask;
+
+  DartConstantTask constantCompilerTask;
+
+  final Set<ClassElement> usedTypeLiterals = new Set<ClassElement>();
+
   /**
    * Tells whether it is safe to remove type declarations from variables,
    * functions parameters. It becomes not safe if:
@@ -96,6 +106,7 @@ class DartBackend extends Backend {
         reexportingLibraries = <Element, LibraryElement>{},
         forceStripTypes = strips.indexOf('types') != -1,
         stripAsserts = strips.indexOf('asserts') != -1,
+        constantCompilerTask  = new DartConstantTask(compiler),
         super(compiler);
 
   bool classNeedsRti(ClassElement cls) => false;
@@ -222,12 +233,20 @@ class DartBackend extends Backend {
       if (!compiler.irBuilder.hasIr(element)) {
         node = element.parseNode(compiler);
       } else {
-        ir.Function function = compiler.irBuilder.getIr(element);
+        ir.FunctionDefinition function = compiler.irBuilder.getIr(element);
         tree.Builder builder = new tree.Builder(compiler);
-        tree.Expression expr = function.accept(builder);
-        treeElements = new TreeElementMapping(element);
-        tree.Emitter emitter = new tree.Emitter();
-        node = emitter.emit(element, treeElements, expr);
+        tree.FunctionDefinition definition = builder.build(function);
+        if (definition == null) {
+          node = element.parseNode(compiler);
+        } else {
+          compiler.tracer.traceCompilation(element.name, null, compiler);
+          compiler.tracer.traceGraph('Tree builder', definition);
+          treeElements = new TreeElementMapping(element);
+          tree.Unnamer unnamer = new tree.Unnamer();
+          unnamer.unname(definition);
+          compiler.tracer.traceGraph('Unnamer', definition);
+          node = dart_codegen.emit(element, treeElements, definition);
+        }
       }
       return new ElementAst(node, treeElements);
     }
@@ -239,11 +258,14 @@ class DartBackend extends Backend {
     // Build all top level elements to emit and necessary class members.
     var newTypedefElementCallback, newClassElementCallback;
 
-    processElement(element, elementAst) {
-      new ReferencedElementCollector(
-          compiler,
-          element, elementAst.treeElements,
-          newTypedefElementCallback, newClassElementCallback).collect();
+    void processElement(Element element, ElementAst elementAst) {
+      ReferencedElementCollector collector =
+          new ReferencedElementCollector(compiler,
+                                         element,
+                                         elementAst,
+                                         newTypedefElementCallback,
+                                         newClassElementCallback);
+      collector.collect();
       elementAsts[element] = elementAst;
     }
 
@@ -292,6 +314,16 @@ class DartBackend extends Backend {
         }
       }
     });
+    Set<ClassElement> emitNoMembersFor = new Set<ClassElement>();
+    usedTypeLiterals.forEach((ClassElement element) {
+      if (shouldOutput(element)) {
+        if (!topLevelElements.contains(element)) {
+          // The class is only referenced by type literals.
+          emitNoMembersFor.add(element);
+        }
+        addClass(element);
+      }
+    });
 
     // Add synthesized constructors to classes with no resolved constructors,
     // but which originally had any constructor.  That should prevent
@@ -301,6 +333,7 @@ class DartBackend extends Backend {
 
     NextClassElement:
     for (ClassElement classElement in classMembers.keys) {
+      if (emitNoMembersFor.contains(classElement)) continue;
       for (Element member in classMembers[classElement]) {
         if (member.isConstructor()) continue NextClassElement;
       }
@@ -376,7 +409,7 @@ class DartBackend extends Backend {
 
       // Emit XML for AST instead of the program.
       for (final topLevel in sortedTopLevels) {
-        if (topLevel.isClass()) {
+        if (topLevel.isClass() && !emitNoMembersFor.contains(topLevel)) {
           // TODO(antonm): add some class info.
           sortedClassMembers[topLevel].forEach(outputElement);
         } else {
@@ -448,6 +481,14 @@ class DartBackend extends Backend {
     return new Future.value();
   }
 
+  void registerTypeLiteral(Element element,
+                           Enqueuer enqueuer,
+                           TreeElements elements) {
+    if (element.isClass()) {
+      usedTypeLiterals.add(element);
+    }
+  }
+
   void registerStaticSend(Element element, Node node) {
     if (useMirrorHelperLibrary) {
       mirrorRenamer.registerStaticSend(element, node);
@@ -506,14 +547,14 @@ class EmitterUnparser extends Unparser {
  */
 class ReferencedElementCollector extends Visitor {
   final Compiler compiler;
-  final Element rootElement;
-  final TreeElements treeElements;
+  final Element element;
+  final ElementAst elementAst;
   final newTypedefElementCallback;
   final newClassElementCallback;
 
   ReferencedElementCollector(this.compiler,
-                             this.rootElement,
-                             this.treeElements,
+                             this.element,
+                             this.elementAst,
                              this.newTypedefElementCallback,
                              this.newClassElementCallback);
 
@@ -522,6 +563,7 @@ class ReferencedElementCollector extends Visitor {
   }
 
   visitTypeAnnotation(TypeAnnotation typeAnnotation) {
+    TreeElements treeElements = elementAst.treeElements;
     final DartType type = treeElements.getType(typeAnnotation);
     assert(invariant(typeAnnotation, type != null,
         message: "Missing type for type annotation: $treeElements."));
@@ -532,8 +574,8 @@ class ReferencedElementCollector extends Visitor {
   }
 
   void collect() {
-    compiler.withCurrentElement(rootElement, () {
-      rootElement.parseNode(compiler).accept(this);
+    compiler.withCurrentElement(element, () {
+      elementAst.ast.accept(this);
     });
   }
 }
@@ -554,3 +596,56 @@ compareElements(e0, e1) {
 
 List<Element> sortElements(Iterable<Element> elements) =>
     sorted(elements, compareElements);
+
+/// [ConstantCompilerTask] for compilation of constants for the Dart backend.
+///
+/// Since this task needs no distinction between frontend and backend constants
+/// it also serves as the [BackendConstantEnvironment].
+class DartConstantTask extends ConstantCompilerTask
+    implements BackendConstantEnvironment {
+  final DartConstantCompiler constantCompiler;
+
+  DartConstantTask(Compiler compiler)
+    : this.constantCompiler = new DartConstantCompiler(compiler),
+      super(compiler);
+
+  String get name => 'ConstantHandler';
+
+  Constant getConstantForVariable(VariableElement element) {
+    return constantCompiler.getConstantForVariable(element);
+  }
+
+  Constant getConstantForNode(Node node, TreeElements elements) {
+    return constantCompiler.getConstantForNode(node, elements);
+  }
+
+  Constant getConstantForMetadata(MetadataAnnotation metadata) {
+    return metadata.value;
+  }
+
+  Constant compileConstant(VariableElement element) {
+    return measure(() {
+      return constantCompiler.compileConstant(element);
+    });
+  }
+
+  void compileVariable(VariableElement element) {
+    measure(() {
+      constantCompiler.compileVariable(element);
+    });
+  }
+
+  Constant compileNode(Node node, TreeElements elements) {
+    return measure(() {
+      return constantCompiler.compileNodeWithDefinitions(node, elements);
+    });
+  }
+
+  Constant compileMetadata(MetadataAnnotation metadata,
+                           Node node,
+                           TreeElements elements) {
+    return measure(() {
+      return constantCompiler.compileMetadata(metadata, node, elements);
+    });
+  }
+}

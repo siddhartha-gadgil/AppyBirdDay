@@ -1474,9 +1474,19 @@ main() {}
           examples: const ["do() {} main() {}"]);
 
   static const MessageKind UNUSED_METHOD = const MessageKind(
-      "The method '#{method_name}' is never called.",
+      "The method '#{name}' is never called.",
       howToFix: "Consider deleting it.",
       examples: const ["deadCode() {} main() {}"]);
+
+  static const MessageKind UNUSED_CLASS = const MessageKind(
+      "The class '#{name}' is never used.",
+      howToFix: "Consider deleting it.",
+      examples: const ["class DeadCode {} main() {}"]);
+
+  static const MessageKind UNUSED_TYPEDEF = const MessageKind(
+      "The typedef '#{name}' is never used.",
+      howToFix: "Consider deleting it.",
+      examples: const ["typedef DeadCode(); main() {}"]);
 
   static const MessageKind ABSTRACT_METHOD = const MessageKind(
       "The method '#{name}' has no implementation in "
@@ -1487,7 +1497,7 @@ main() {}
 class Class {
   method();
 }
-main() => new Class();
+main() => new Class().method();
 """]);
 
   static const MessageKind ABSTRACT_GETTER = const MessageKind(
@@ -1706,6 +1716,121 @@ main() => new C();
 main() {
   var m = const {'foo': 1, 'foo': 2};
 }"""]);
+
+  static const MessageKind BAD_INPUT_CHARACTER = const MessageKind(
+      "Character U+#{characterHex} isn't allowed here.",
+      howToFix: DONT_KNOW_HOW_TO_FIX,
+      examples: const ["""
+main() {
+  String x = ç;
+}
+"""]);
+
+  static const MessageKind UNTERMINATED_STRING = const MessageKind(
+      "String must end with #{quote}.",
+      howToFix: DONT_KNOW_HOW_TO_FIX,
+      examples: const ["""
+main() {
+  return '
+;
+}
+""",
+"""
+main() {
+  return \"
+;
+}
+""",
+"""
+main() {
+  return r'
+;
+}
+""",
+"""
+main() {
+  return r\"
+;
+}
+""",
+"""
+main() => '''
+""",
+"""
+main() => \"\"\"
+""",
+"""
+main() => r'''
+""",
+"""
+main() => r\"\"\"
+"""]);
+
+  static const MessageKind UNMATCHED_TOKEN = const MessageKind(
+      "Can't find '#{end}' to match '#{begin}'.",
+      howToFix: DONT_KNOW_HOW_TO_FIX,
+      examples: const[
+          "main(",
+          "main(){",
+          "main(){]}",
+        ]);
+
+  static const MessageKind UNTERMINATED_TOKEN = const MessageKind(
+      // This is a fall-back message that shouldn't happen.
+      "Incomplete token.");
+
+  static const MessageKind EXPONENT_MISSING = const MessageKind(
+      "Numbers in exponential notation should always contain an exponent"
+      " (an integer number with an optional sign).",
+      howToFix: "Make sure there is an exponent, and remove any whitespace "
+      "before it.",
+      examples: const ["""
+main() {
+  var i = 1e;
+}
+"""]);
+
+  static const MessageKind HEX_DIGIT_EXPECTED = const MessageKind(
+      "A hex digit (0-9 or A-F) must follow '0x'.",
+      howToFix: DONT_KNOW_HOW_TO_FIX, // Seems obvious from the error message.
+      examples: const ["""
+main() {
+  var i = 0x;
+}
+"""]);
+
+  static const MessageKind MALFORMED_STRING_LITERAL = const MessageKind(
+      r"A '$' has special meaning inside a string, and must be followed by an"
+      " identifier or an expression in curly braces ({}).",
+      howToFix: r"Try adding a backslash (\) to escape the '$'.",
+      examples: const [r"""
+main() {
+  return '$';
+}
+""",
+r'''
+main() {
+  return "$";
+}
+''',
+r"""
+main() {
+  return '''$''';
+}
+""",
+r'''
+main() {
+  return """$""";
+}
+''']);
+
+  static const MessageKind UNTERMINATED_COMMENT = const MessageKind(
+      "Comment starting with '/*' must end with '*/'.",
+      howToFix: DONT_KNOW_HOW_TO_FIX,
+      examples: const [r"""
+main() {
+}
+/*"""]);
 
   static const MessageKind COMPILER_CRASHED = const MessageKind(
       "The compiler crashed when compiling this element.");

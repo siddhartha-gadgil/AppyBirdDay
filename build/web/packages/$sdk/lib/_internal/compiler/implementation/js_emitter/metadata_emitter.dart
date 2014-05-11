@@ -27,7 +27,8 @@ class MetadataEmitter extends CodeEmitterHelper {
       if (link != null) {
         for (; !link.isEmpty; link = link.tail) {
           MetadataAnnotation annotation = link.head;
-          Constant value = annotation.value;
+          Constant value =
+              backend.constants.getConstantForMetadata(annotation);
           if (value == null) {
             compiler.internalError(annotation, 'Annotation value is null.');
           } else {
@@ -36,8 +37,8 @@ class MetadataEmitter extends CodeEmitterHelper {
         }
       }
       if (metadata.isEmpty) return null;
-      return js.fun(
-          [], [js.return_(new jsAst.ArrayInitializer.from(metadata))]);
+      return js('function() { return # }',
+          new jsAst.ArrayInitializer.from(metadata));
     });
   }
 
@@ -46,8 +47,7 @@ class MetadataEmitter extends CodeEmitterHelper {
     if (signature.optionalParameterCount == 0) return const [];
     List<int> defaultValues = <int>[];
     for (Element element in signature.optionalParameters) {
-      Constant value =
-          compiler.constantHandler.initialVariableValues[element];
+      Constant value = backend.constants.getConstantForVariable(element);
       String stringRepresentation = (value == null)
           ? "null"
           : jsAst.prettyPrint(task.constantReference(value), compiler)
@@ -58,7 +58,7 @@ class MetadataEmitter extends CodeEmitterHelper {
   }
 
   int reifyMetadata(MetadataAnnotation annotation) {
-    Constant value = annotation.value;
+    Constant value = backend.constants.getConstantForMetadata(annotation);
     if (value == null) {
       compiler.internalError(annotation, 'Annotation value is null.');
       return -1;
@@ -70,7 +70,7 @@ class MetadataEmitter extends CodeEmitterHelper {
   int reifyType(DartType type) {
     jsAst.Expression representation =
         backend.rti.getTypeRepresentation(type, (variable) {
-          return js.toExpression(
+          return js.number(
               task.typeVariableHandler.reifyTypeVariable(variable.element));
         });
 
@@ -95,13 +95,13 @@ class MetadataEmitter extends CodeEmitterHelper {
     var properties = [];
     for (TypedefElement literal in literals) {
       var key = namer.getNameX(literal);
-      var value = js.toExpression(reifyType(literal.rawType));
+      var value = js.number(reifyType(literal.rawType));
       properties.add(new jsAst.Property(js.string(key), value));
     }
     var map = new jsAst.ObjectInitializer(properties);
     buffer.write(
         jsAst.prettyPrint(
-            js('init.functionAliases = #', map).toStatement(), compiler));
+            js.statement('init.functionAliases = #', map), compiler));
     buffer.write('${N}init.metadata$_=$_[');
     for (var metadata in globalMetadata) {
       if (metadata is String) {
